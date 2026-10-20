@@ -1,0 +1,4 @@
+name: yolink
+version: 0.8.0
+description: "按明确的云端目录生成 STRM，并查询 YoLink 任务状态。"
+author: YoLink

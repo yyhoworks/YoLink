@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+# Fast trial build: select the binary for the Docker target architecture.
+FROM alpine:3.22
+ARG TARGETARCH
+RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data /strm
+COPY dist/yolink-linux-${TARGETARCH} /usr/local/bin/yolink
+RUN chmod 755 /usr/local/bin/yolink
+COPY LICENSE THIRD_PARTY.md /licenses/
+COPY licenses /licenses/dependencies
+WORKDIR /app
+ENV TZ=Asia/Shanghai STRMLINK_DATA=/data STRMLINK_OUTPUT=/strm STRMLINK_LISTEN=:8796
+EXPOSE 8796
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["yolink","healthcheck"]
+ENTRYPOINT ["/usr/local/bin/yolink"]

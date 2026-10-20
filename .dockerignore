@@ -1,0 +1,13 @@
+*
+!go.mod
+!go.sum
+!*.go
+!web
+!web/**
+!LICENSE
+!THIRD_PARTY.md
+!licenses
+!licenses/**
+!dist
+!dist/yolink-linux-amd64
+!dist/yolink-linux-arm64

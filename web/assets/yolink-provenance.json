@@ -1,0 +1,14 @@
+{
+  "selected": "03 · 莫比乌斯双环链",
+  "source": "YoLink Logo Studio.html / getLogoSVG(03)",
+  "colors": {
+    "chain": "#34b263",
+    "play": "#38bdf8"
+  },
+  "svg_sha256": "91efa8ab158ba2e6fb9c131a9ce2e234c64a8b1b7a5201cc5a229591c3ed5e0f",
+  "derived": {
+    "yolink-icon.png": "User selected YoLink Logo Studio.html, getLogoSVG(03), original SVG geometry; green #34b263 and cyan #38bdf8.",
+    "favicon.ico": "User selected YoLink Logo Studio.html, getLogoSVG(03), original SVG geometry; green #34b263 and cyan #38bdf8."
+  },
+  "superseded": "yolink-logo.png is the previous supplied wordmark; no longer referenced by the UI."
+}

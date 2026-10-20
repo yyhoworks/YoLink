@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>YoLink 双环链</title>
+  <desc>用户选定的 Logo Studio 03：绿色链环连接青蓝播放三角。</desc>
+  <rect x="4" y="4" width="56" height="56" rx="15" fill="#121715" stroke="#38bdf8" stroke-width="2" stroke-opacity=".5"/>
+  <rect x="11" y="25" width="25" height="16" rx="8" transform="rotate(-22 11 25)" stroke="#34b263" stroke-width="5.5"/>
+  <path d="M31 23L51 32L31 41C27.5 41 25 37.5 25 32C25 26.5 27.5 23 31 23Z" stroke="#38bdf8" stroke-width="5.5" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,30 @@
+.automation-settings{max-width:1080px}
+.automation-settings-nav{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 24px}
+.automation-settings-nav button{min-height:40px}
+.automation-settings>.section-heading{align-items:flex-start;gap:18px}
+.automation-settings h2,.automation-settings h3{margin-top:0}
+.automation-settings .section-heading p{margin-bottom:0}
+.automation-settings .generation-options{margin-top:28px;padding-top:24px}
+.automation-connection{margin:20px 0 14px;line-height:1.7}
+.automation-connection p{margin:6px 0}
+.automation-search{max-width:420px;margin:18px 0 8px}
+.automation-target{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 0;border-bottom:1px solid var(--border)}
+.automation-target-copy{min-width:0}
+.automation-target-copy p{margin:7px 0 0;line-height:1.9;overflow-wrap:anywhere}
+.automation-target code{font-size:12px;white-space:normal;overflow-wrap:anywhere}
+.automation-target-actions{flex-shrink:0;flex-wrap:wrap}
+.automation-editor{padding:24px 0 6px;margin-top:20px;border-top:1px solid var(--border);scroll-margin-top:120px}
+.automation-editor .form-grid{margin:18px 0}
+#automation-output{overflow-wrap:anywhere}
+.automation-source-field{grid-column:1/-1}
+.automation-path-input{display:flex;gap:10px;align-items:center}
+.automation-path-input input{min-width:0;flex:1}
+.automation-path-input button{flex-shrink:0}
+.automation-help{line-height:1.9;margin-top:20px}
+.automation-run{padding:18px 0;border-bottom:1px solid var(--border)}
+.automation-run-heading{display:flex;justify-content:space-between;gap:16px;align-items:baseline}
+.automation-run-path{margin:10px 0;overflow-wrap:anywhere;line-height:1.8}
+.automation-run-stages{display:flex;flex-wrap:wrap;gap:10px 24px;color:var(--muted);font-size:13px;line-height:1.8}
+.automation-run>.actions{margin-top:12px}
+.automation-run p{overflow-wrap:anywhere}
+@media(max-width:760px){.automation-target{align-items:flex-start;flex-direction:column;gap:12px}.automation-target-actions{width:100%}.automation-settings .section-heading{flex-wrap:wrap}.automation-settings .section-heading>button{flex-shrink:0}.automation-target-actions button{min-height:44px;flex:1}.automation-path-input{flex-wrap:wrap}.automation-path-input input{flex-basis:100%}.automation-run-heading{flex-wrap:wrap;gap:6px}.automation-run-stages{display:grid;gap:4px}.automation-editor{scroll-margin-top:100px}.automation-editor .form-actions{position:static}.automation-settings code{overflow-wrap:anywhere}}

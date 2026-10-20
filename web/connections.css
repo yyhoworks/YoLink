@@ -1,0 +1,22 @@
+/* Connection management extends the approved A settings surface. */
+html:has(#settings-drawer[open]){overflow:hidden}
+#settings-drawer{overscroll-behavior:contain}
+.settings-intro{font-size:13px;line-height:1.9;color:var(--muted);margin:0 0 24px}
+.connection-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:20px 0 10px}
+.connection-toolbar h3{margin:0}.connection-toolbar button{white-space:nowrap}
+.connection-row{padding:18px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.connection-row>div:first-child{min-width:0;flex:1 1 270px}.connection-row strong{font-size:14px;overflow-wrap:anywhere}
+.connection-row p{font-size:12px;line-height:1.9;margin:6px 0 0;overflow-wrap:anywhere}.connection-row .actions{gap:8px;margin-top:0!important;flex-wrap:wrap}
+.connection-type{display:inline-block;margin-left:10px;color:var(--muted);font-size:12px}
+.connection-editor{margin:24px 0 0;padding-top:22px;border-top:1px solid var(--border);scroll-margin-top:90px}
+.connection-editor>.section-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px}
+.channel-events,.client-rule-options{border:0;padding:0;margin:24px 0 14px;min-width:0}.channel-events legend,.client-rule-options legend{font-size:13px;font-weight:600;margin-bottom:8px}
+.connection-help{padding:18px 0;border-top:1px solid var(--border);margin-top:22px}.connection-help>summary{min-height:40px;padding:9px 0;font-size:13px;color:var(--info);cursor:pointer}.connection-help p{font-size:13px;line-height:1.9;margin:12px 0}
+.connection-help pre{font-size:12px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:var(--field);border-radius:10px;margin:16px 0;max-width:100%}
+.connection-output{margin-top:30px;padding-top:22px;border-top:1px solid var(--border)}.connection-output h3{margin-bottom:10px}
+.connection-output-row{padding:15px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:16px}.connection-output-row>div{min-width:0}.connection-output-row code{display:block;margin-top:7px;font-size:12px;overflow-wrap:anywhere;line-height:1.9}
+.connection-confirm,.connection-issued{padding:18px;margin-top:20px;background:var(--soft);border-radius:12px;scroll-margin-top:90px}.connection-confirm p{font-size:13px;line-height:1.9;margin:0 0 15px}.connection-confirm button:first-child{color:var(--danger)}
+.connection-flow{display:flex;gap:8px 18px;flex-wrap:wrap;list-style:decimal inside;padding:0;margin:16px 0 28px;color:var(--muted);font-size:12px;line-height:1.9}
+.connection-call{display:grid;grid-template-columns:minmax(100px,1fr) minmax(140px,1.3fr) auto auto;gap:10px;align-items:center;font-size:12px;padding:12px 0;border-bottom:1px solid var(--border)}.connection-call strong{overflow-wrap:anywhere}.connection-call code{overflow-wrap:anywhere;font-size:12px}.connection-call time{color:var(--muted);font-variant-numeric:tabular-nums}
+#channel-operation-result,#client-operation-result{font-size:13px;line-height:1.9;overflow-wrap:anywhere;margin:14px 0}
+@media(max-width:760px){.connection-row{padding:16px 0;gap:12px}.connection-row>div:first-child{flex-basis:100%;min-width:0}.connection-row .actions{width:100%}.connection-row .actions button{flex:1;padding:8px 10px}.connection-type{display:block;margin:5px 0 0}.connection-call{grid-template-columns:minmax(0,1fr) auto}.connection-call code{grid-column:1;grid-row:2}.connection-call time{grid-column:2;grid-row:2}.connection-confirm,.connection-issued{padding:15px}.connection-flow{display:block}.connection-flow li{margin:6px 0}.connection-output-row{align-items:flex-start}}

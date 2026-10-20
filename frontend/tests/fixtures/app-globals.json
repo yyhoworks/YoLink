@@ -1,0 +1,134 @@
+[
+  {
+    "name": "$",
+    "kind": "const"
+  },
+  {
+    "name": "names",
+    "kind": "const"
+  },
+  {
+    "name": "statusNames",
+    "kind": "const"
+  },
+  {
+    "name": "state",
+    "kind": "let"
+  },
+  {
+    "name": "view",
+    "kind": "let"
+  },
+  {
+    "name": "polling",
+    "kind": "let"
+  },
+  {
+    "name": "toastTimer",
+    "kind": "let"
+  },
+  {
+    "name": "routes",
+    "kind": "const"
+  },
+  {
+    "name": "routeReady",
+    "kind": "let"
+  },
+  {
+    "name": "activeRoute",
+    "kind": "let"
+  },
+  {
+    "name": "writeRoute",
+    "kind": "function"
+  },
+  {
+    "name": "restoreRoute",
+    "kind": "function"
+  },
+  {
+    "name": "esc",
+    "kind": "const"
+  },
+  {
+    "name": "icons",
+    "kind": "const"
+  },
+  {
+    "name": "toast",
+    "kind": "const"
+  },
+  {
+    "name": "api",
+    "kind": "function"
+  },
+  {
+    "name": "action",
+    "kind": "function"
+  },
+  {
+    "name": "showLogin",
+    "kind": "function"
+  },
+  {
+    "name": "showApp",
+    "kind": "function"
+  },
+  {
+    "name": "nav",
+    "kind": "function"
+  },
+  {
+    "name": "refresh",
+    "kind": "function"
+  },
+  {
+    "name": "accountBy",
+    "kind": "const"
+  },
+  {
+    "name": "ruleBy",
+    "kind": "const"
+  },
+  {
+    "name": "jobClass",
+    "kind": "const"
+  },
+  {
+    "name": "date",
+    "kind": "const"
+  },
+  {
+    "name": "render",
+    "kind": "function"
+  },
+  {
+    "name": "renderPlaybackMedia",
+    "kind": "function"
+  },
+  {
+    "name": "credentialSchema",
+    "kind": "const"
+  },
+  {
+    "name": "providerNotes",
+    "kind": "const"
+  },
+  {
+    "name": "providerFields",
+    "kind": "function"
+  },
+  {
+    "name": "resetAccount",
+    "kind": "function"
+  },
+  {
+    "name": "copy",
+    "kind": "function"
+  },
+  {
+    "name": "initial",
+    "kind": "const"
+  }
+]

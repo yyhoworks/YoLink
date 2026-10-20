@@ -1,0 +1,36 @@
+name: yolink
+services:
+  yolink:
+    image: yolink:0.11.10
+    container_name: yolink
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    restart: unless-stopped
+    ports:
+      - "${STRMLINK_PORT:-8796}:8796"
+    environment:
+      TZ: Asia/Shanghai
+      STRMLINK_ADMIN_PASSWORD: ${STRMLINK_ADMIN_PASSWORD:-}
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+      - type: bind
+        source: ${STRMLINK_OUTPUT_DIR:-./strm-test}
+        target: /strm
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
