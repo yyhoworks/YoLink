@@ -180,6 +180,9 @@ func (e *Engine) enqueueJob(ruleID, folder, sourcePath string, dry bool, limit i
 			return j, errors.New("原任务缺少目录规则快照，无法安全重试，请按当前规则重新生成")
 		}
 		old := previous.Snapshot
+		if trigger == "health-recovery" && !recoveryRuleMatches(old, r) {
+			return j, errors.New("目录规则已改变，无法恢复旧任务，请按当前规则重新生成")
+		}
 		if old.Account != r.Account || old.Folder != r.Folder || old.SourcePath != r.SourcePath || old.Output != r.Output {
 			return j, errors.New("目录规则映射已改变，无法重试旧任务，请按当前规则重新生成")
 		}

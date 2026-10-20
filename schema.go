@@ -12,7 +12,7 @@ type schemaRunner interface {
 	Query(string, ...any) (*sql.Rows, error)
 }
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 4
 
 const baseSchema = `CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, payload TEXT NOT NULL, secret BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS rules(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
@@ -40,7 +40,18 @@ func migrateLegacySchema(tx *sql.Tx) error {
 }
 
 func migrateSchema(db *sql.DB) error {
-	return applySchemaMigrations(db, []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints})
+	return applySchemaMigrations(db, []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics})
+}
+
+func migrateDiagnostics(tx *sql.Tx) error {
+	_, err := tx.Exec("CREATE TABLE diagnostic_reports(id TEXT PRIMARY KEY,created INTEGER NOT NULL,payload TEXT NOT NULL); CREATE INDEX diagnostic_time ON diagnostic_reports(created);")
+	return err
+}
+
+func migrateAccountHealth(tx *sql.Tx) error {
+	_, err := tx.Exec(`CREATE TABLE account_health(account TEXT NOT NULL,operation TEXT NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(account,operation));
+CREATE TRIGGER account_health_cleanup AFTER DELETE ON accounts BEGIN DELETE FROM account_health WHERE account=OLD.id; END;`)
+	return err
 }
 
 func migrateCompactCheckpoints(tx *sql.Tx) error {

@@ -328,7 +328,7 @@ func (s *Server) probeTarget(ctx context.Context, target PlaybackTarget) Playbac
 		return result
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/json") {
+	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/json") || strings.Contains(contentType, "application/xml") || strings.Contains(contentType, "text/xml") {
 		result.Error = "下载地址返回了网页或接口数据，未取得媒体"
 		return result
 	}
@@ -336,9 +336,11 @@ func (s *Server) probeTarget(ctx context.Context, target PlaybackTarget) Playbac
 	result.Bytes = n
 	result.Readable = n > 0 && e == nil
 	endPart := strings.TrimPrefix(resp.Header.Get("Content-Range"), "bytes 0-")
-	endText, _, rangeShape := strings.Cut(endPart, "/")
+	endText, totalText, rangeShape := strings.Cut(endPart, "/")
 	end, rangeErr := strconv.ParseInt(endText, 10, 64)
-	result.Range = result.Readable && resp.StatusCode == 206 && strings.HasPrefix(resp.Header.Get("Content-Range"), "bytes 0-") && rangeShape && rangeErr == nil && end >= 0 && end <= 1023 && n == end+1
+	total, totalErr := strconv.ParseInt(totalText, 10, 64)
+	validTotal := totalText == "*" || totalErr == nil && total > end
+	result.Range = result.Readable && resp.StatusCode == 206 && strings.HasPrefix(resp.Header.Get("Content-Range"), "bytes 0-") && rangeShape && rangeErr == nil && validTotal && end >= 0 && end <= 1023 && n == end+1
 	if !result.Readable {
 		result.Error = "媒体响应没有可读取的数据"
 	} else if !result.Range {

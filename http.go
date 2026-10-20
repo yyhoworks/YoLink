@@ -179,6 +179,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/records/trace", s.guard(s.recordTrace))
 	mux.HandleFunc("POST /api/accounts", s.guard(s.saveAccount))
 	mux.HandleFunc("POST /api/accounts/{id}/check", s.guard(s.checkAccount))
+	mux.HandleFunc("GET /api/accounts/{id}/health", s.guard(s.healthAccount))
+	mux.HandleFunc("POST /api/accounts/{id}/recover", s.guard(s.recoverAccount))
 	mux.HandleFunc("POST /api/accounts/{id}/quota", s.guard(s.accountQuota))
 	mux.HandleFunc("POST /api/accounts/{id}/enabled", s.guard(s.enableAccount))
 	mux.HandleFunc("POST /api/accounts/{id}/remove", s.guard(s.removeAccount))
@@ -231,6 +233,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/media/{id}/playlist", s.guard(s.mediaPlaylist))
 	mux.HandleFunc("GET /api/rules/{id}/playlist", s.guard(s.rulePlaylist))
 	mux.HandleFunc("POST /api/playback/{id}/check", s.guard(s.checkPlayback))
+	mux.HandleFunc("POST /api/media/{id}/diagnose", s.guard(s.diagnoseMedia))
+	mux.HandleFunc("GET /api/diagnostics/{id}/export", s.guard(s.exportDiagnostic))
 	mux.HandleFunc("POST /api/playback/cache/clear", s.guard(func(w http.ResponseWriter, r *http.Request) { s.links.clear(); jsonOut(w, 200, object{"ok": true}) }))
 	mux.HandleFunc("GET /s/{id}/{name}", s.play)
 	mux.HandleFunc("GET /redirect", func(w http.ResponseWriter, r *http.Request) {

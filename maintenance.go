@@ -422,6 +422,16 @@ func (s *Server) rollbackPlan(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, planSummary(p))
 }
 func (s *Server) resolveLegacy(ctx context.Context, m Media) (Media, error) {
+	m, err := s.lookupLegacy(ctx, m)
+	if err != nil {
+		return m, err
+	}
+	return m, s.s.saveMedia(m)
+}
+
+// Lookup alone is used by diagnostics: inspecting an unresolved legacy entry
+// must not silently mutate its persistent index or bind it to a changed account.
+func (s *Server) lookupLegacy(ctx context.Context, m Media) (Media, error) {
 	a, e := s.s.account(m.Account)
 	if e != nil || a.Disabled {
 		return m, errors.New("迁移账号不可用")
@@ -450,6 +460,5 @@ func (s *Server) resolveLegacy(ctx context.Context, m Media) (Media, error) {
 		return m, errors.New("迁移路径中未找到媒体，请检查网盘映射")
 	}
 	m.RemoteID = found
-	e = s.s.saveMedia(m)
-	return m, e
+	return m, nil
 }

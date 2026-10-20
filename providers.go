@@ -34,6 +34,12 @@ type Clouds interface {
 	List(context.Context, string, string) ([]Entry, error)
 	Resolve(context.Context, Media) (PlaybackTarget, error)
 }
+
+type expectedAccountRevisionKey struct{}
+type expectedAccountRevision struct {
+	ID       string
+	Revision int64
+}
 type Providers struct {
 	s      *Store
 	client *http.Client
@@ -108,12 +114,15 @@ func (p *Providers) with(ctx context.Context, id string, fn func(*Account) error
 	if a.Disabled {
 		return errors.New("此网盘已停用，请先在网盘管理中启用")
 	}
+	if expected, ok := ctx.Value(expectedAccountRevisionKey{}).(expectedAccountRevision); ok && (expected.ID != a.ID || expected.Revision != a.Revision) {
+		return &CloudError{Kind: "configuration", Code: "account_changed", Message: "检查期间账号配置已改变，请重新诊断"}
+	}
 	before, _ := json.Marshal(a.Secrets)
 	defer func() {
 		after, _ := json.Marshal(a.Secrets)
 		if !bytes.Equal(before, after) {
 			if e := p.s.saveAccount(a); e != nil {
-				err = errors.New("凭据续期后保存失败，请检查数据卷")
+				err = &CloudError{Kind: "storage", Code: "credential_save", Message: "凭据续期后保存失败，请检查数据卷"}
 			}
 		}
 	}()
@@ -315,8 +324,14 @@ func (p *Providers) refresh139(ctx context.Context, a *Account, parts []string) 
 		Return string `xml:"return"`
 		Token  string `xml:"token"`
 	}
-	if resp.StatusCode != 200 || xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&x) != nil || x.Return != "0" || x.Token == "" {
-		return errors.New("移动授权续期失败，请重新导入 Authorization")
+	if resp.StatusCode != 200 {
+		return cloudHTTPError(resp.StatusCode, resp.Header.Get("Retry-After"), time.Now())
+	}
+	if xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&x) != nil {
+		return cloudProtocolError("移动续期接口返回格式异常，请稍后重试")
+	}
+	if x.Return != "0" || x.Token == "" {
+		return &CloudError{Kind: "other", Code: "refresh_rejected", Message: "移动续期请求未成功，请核对账号与通道状态"}
 	}
 	a.Secrets["authorization"] = base64.StdEncoding.EncodeToString([]byte(parts[0] + ":" + parts[1] + ":" + x.Token))
 	return nil
@@ -466,6 +481,8 @@ func (p *Providers) ali(ctx context.Context, a *Account, path string, body any) 
 }
 
 func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Entry, err error) {
+	observe := p.beginCloudObservation(ctx, aid, "list")
+	defer func() { observe(err) }()
 	entries = []Entry{}
 	cursor := ""
 	seen := map[string]bool{}
@@ -638,6 +655,8 @@ func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Ent
 	return nil, cloudProtocolError("目录超过分页上限，请缩小扫描范围")
 }
 func (p *Providers) Resolve(ctx context.Context, m Media) (target PlaybackTarget, err error) {
+	observe := p.beginCloudObservation(ctx, m.Account, "resolve")
+	defer func() { observe(err) }()
 	ctx = context.WithValue(ctx, playbackPriorityKey{}, true)
 	err = p.with(ctx, m.Account, func(a *Account) error {
 		var r object

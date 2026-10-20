@@ -108,6 +108,12 @@ func (s *Server) checkAccount(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	files, checkErr := s.clouds.List(ctx, a.ID, a.Root)
+	if _, production := s.clouds.(*Providers); !production {
+		if err := s.s.observeAccount(a, "list", time.Now(), time.Now(), checkErr); err != nil {
+			fail(w, 500, "健康状态保存失败")
+			return
+		}
+	}
 	report, e := s.s.updateAccountReport(a.ID, func(v *AccountReport) {
 		v.Checked = time.Now().Unix()
 		v.Reachable = checkErr == nil
@@ -236,6 +242,13 @@ func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Providers) Quota(ctx context.Context, id string) (usage QuotaUsage, err error) {
+	observe := p.beginCloudObservation(ctx, id, "quota")
+	defer func() { observe(err) }()
+	// Capability is known without refreshing a token or contacting the network.
+	// An unsupported quota query must not trigger an unrelated login attempt.
+	if a, er := p.s.account(id); er == nil && !a.Disabled && a.Provider == "quarktv" {
+		return usage, &CloudError{Kind: "unsupported", Code: "quota_unsupported", Message: "此通道暂未提供容量查询，仍可浏览和生成 STRM"}
+	}
 	err = p.with(ctx, id, func(a *Account) error {
 		var result object
 		var e error
@@ -274,7 +287,7 @@ func (p *Providers) Quota(ctx context.Context, id string) (usage QuotaUsage, err
 				}
 			}
 		default:
-			return errors.New("此通道暂未提供容量查询，仍可浏览和生成 STRM")
+			return &CloudError{Kind: "unsupported", Code: "quota_unsupported", Message: "此通道暂未提供容量查询，仍可浏览和生成 STRM"}
 		}
 		if e != nil {
 			return e
