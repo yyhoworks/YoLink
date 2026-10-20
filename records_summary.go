@@ -10,29 +10,38 @@ import (
 
 // Group adjacent requests, never infer an actual user viewing session. Full
 // requests stay in activity_events; filtering and pagination operate on groups.
+// Window sorts carry only numeric fields. Attach payloads after aggregation so
+// retained history does not exhaust the container's small temporary filesystem.
 const groupedPlaybackCTE = `WITH resolutions AS (
  SELECT request,
  SUM(CASE WHEN COALESCE(json_extract(payload,'$.cache'),0)=0 THEN 1 ELSE 0 END) AS fresh,
  SUM(CASE WHEN json_extract(payload,'$.cache')=1 THEN 1 ELSE 0 END) AS reused,
  SUM(COALESCE(json_extract(payload,'$.millis'),0)) AS resolve_ms
  FROM activity_events WHERE kind='direct' AND request<>'' AND json_extract(payload,'$.event') IN ('get','head') GROUP BY request
-), base AS (
- SELECT e.*,COALESCE(d.fresh,0) AS fresh,COALESCE(d.reused,0) AS reused,COALESCE(d.resolve_ms,0) AS resolve_ms,
+), identities AS (
+ SELECT e.id,e.time,COALESCE(json_extract(e.payload,'$.millis'),0) AS request_ms,
+ COALESCE(d.fresh,0) AS fresh,COALESCE(d.reused,0) AS reused,COALESCE(d.resolve_ms,0) AS resolve_ms,
  json_array(e.account,e.media,
  COALESCE(json_extract(e.payload,'$.ip'),''),COALESCE(json_extract(e.payload,'$.user_agent'),''),COALESCE(json_extract(e.payload,'$.client'),''),
  COALESCE(json_extract(e.payload,'$.event'),''),COALESCE(json_extract(e.payload,'$.mode'),''),
  e.outcome,COALESCE(json_extract(e.payload,'$.error'),''),CASE WHEN e.media='' THEN e.id ELSE 0 END) AS source_key
  FROM activity_events e LEFT JOIN resolutions d ON e.request=d.request WHERE e.kind='playback'
+), base AS (
+ SELECT id,time,request_ms,fresh,reused,resolve_ms,
+ DENSE_RANK() OVER (ORDER BY source_key) AS source_no FROM identities
 ), gaps AS (
- SELECT *,CASE WHEN time-LAG(time) OVER (PARTITION BY source_key ORDER BY time,id)<=30000 THEN 0 ELSE 1 END AS new_group FROM base
+ SELECT *,CASE WHEN time-LAG(time) OVER (PARTITION BY source_no ORDER BY time,id)<=30000 THEN 0 ELSE 1 END AS new_group FROM base
 ), marked AS (
- SELECT *,SUM(new_group) OVER (PARTITION BY source_key ORDER BY time,id ROWS UNBOUNDED PRECEDING) AS group_no FROM gaps
-), grouped AS (
+ SELECT *,SUM(new_group) OVER (PARTITION BY source_no ORDER BY time,id ROWS UNBOUNDED PRECEDING) AS group_no FROM gaps
+), numbered AS (
  SELECT *,MIN(id) OVER cluster AS group_id,MIN(time) OVER cluster AS first_time,
  COUNT(*) OVER cluster AS request_count,SUM(fresh) OVER cluster AS resolve_count,SUM(reused) OVER cluster AS reuse_count,
- MAX(COALESCE(json_extract(payload,'$.millis'),0)) OVER cluster AS max_ms,SUM(resolve_ms) OVER cluster AS resolution_ms,
- ROW_NUMBER() OVER (PARTITION BY source_key,group_no ORDER BY time DESC,id DESC) AS latest
- FROM marked WINDOW cluster AS (PARTITION BY source_key,group_no)
+ MAX(request_ms) OVER cluster AS max_ms,SUM(resolve_ms) OVER cluster AS resolution_ms,
+ ROW_NUMBER() OVER (PARTITION BY source_no,group_no ORDER BY time DESC,id DESC) AS latest
+ FROM marked WINDOW cluster AS (PARTITION BY source_no,group_no)
+), grouped AS (
+ SELECT e.*,n.group_id,n.first_time,n.request_count,n.resolve_count,n.reuse_count,
+ n.max_ms,n.resolution_ms,n.latest FROM numbered n JOIN activity_events e ON e.id=n.id
 ) `
 
 type PlaybackSummary struct {

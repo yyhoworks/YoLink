@@ -5,9 +5,63 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPlaybackSummaryWithLargePayloadsPreservesSearchAndDetails(t *testing.T) {
+	f := setup(t)
+	_, h, cookie := testToolsServer(t, f, f.c)
+	tx, err := f.s.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	const count = 1600
+	for i := 0; i < count; i++ {
+		a := Activity{Time: now + int64(i), Media: "large-media", Account: f.a.ID, Name: "summary-search-marker.mkv", Path: "/media/" + strings.Repeat("长目录", 300) + "/movie.mkv", Note: strings.Repeat("retained metadata ", 70), IP: "192.0.2.1", UserAgent: "SyntheticPlayer/" + strings.Repeat("x", 220), Client: "SyntheticPlayer", Mode: "302", Request: "large-" + strconv.Itoa(i), Millis: 7}
+		for _, kind := range []string{"direct", "playback"} {
+			a.Kind = kind
+			if kind == "direct" {
+				a.Event = "get"
+				a.Outcome = "resolved"
+			} else {
+				a.Event = "play"
+				a.Outcome = "redirected"
+			}
+			raw, err := json.Marshal(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec("INSERT INTO activity_events(kind,time,account,media,outcome,request,payload) VALUES(?,?,?,?,?,?,?)", a.Kind, a.Time, a.Account, a.Media, a.Outcome, a.Request, string(raw)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	items, total, requests := summaryGET(t, h, cookie, "&q=summary-search-marker")
+	if total != 1 || requests != count || len(items) != 1 || items[0].RequestCount != count || items[0].ResolveCount != count || items[0].Path == "" {
+		t.Fatal(total, requests, items)
+	}
+	req := httptest.NewRequest("GET", "/api/records/trace?media=large-media&group="+strconv.FormatInt(items[0].GroupID, 10)+"&page=2", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	var trace struct {
+		Playback, Direct []Activity
+		Total, Page      int
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &trace); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || trace.Total != count || trace.Page != 2 || len(trace.Playback) != 20 || len(trace.Direct) != 20 {
+		t.Fatal(w.Code, trace.Total, trace.Page, len(trace.Playback), len(trace.Direct))
+	}
+}
 
 func summaryGET(t *testing.T, h http.Handler, c *http.Cookie, params string) ([]PlaybackSummary, int, int) {
 	t.Helper()

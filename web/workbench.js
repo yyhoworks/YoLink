@@ -111,7 +111,7 @@ function syncRecordSections(){
 }
 async function loadRecordDeliveries(){
  if(!recordsScope)return;
- const request=recordsScope.latest('list');$('records-error').hidden=true;$('records-table-panel').setAttribute('aria-busy','true');
+ const request=recordsScope.latest('list');$('records-error').hidden=true;$('records-table-panel').setAttribute('aria-busy','true');$('records-status').textContent='正在读取通知投递…';
  try{
   const data=await api('/api/integrations',undefined,{signal:request.signal});if(!request.current()||recordsKind!=='deliveries')return;integrationData=data;
   const q=$('records-search').value.trim().toLowerCase(),outcome=$('records-outcome').value;
@@ -119,7 +119,7 @@ async function loadRecordDeliveries(){
   $('records-status').textContent=rows.length+' 条匹配 · 最近 '+data.deliveries.length+' 条投递';$('records-head').innerHTML='';
   const key=JSON.stringify(['deliveries',rows]);if(recordsRenderKey!==key){recordsRenderKey=key;$('records-body').innerHTML=rows.length?rows.map(d=>'<tr class="compact-record-row"><td colspan="6"><article class="compact-record delivery-record"><div class="compact-identity">'+wbIcon(d.kind==='library'?'tv-minimal':'send')+'<div><strong>'+(d.kind==='library'?'媒体库刷新':'任务通知')+'</strong><small>'+esc((d.channel_name?d.channel_name+' · ':'')+(d.title||'生成后操作'))+'</small></div></div><div class="compact-paths"><code title="'+esc(d.source_path)+'">'+esc(d.source_path||'目录未记录')+'</code><p class="'+(d.error?'error':'hint')+'">'+'尝试 '+d.attempts+' 次'+(d.error?' · '+esc(d.error):'')+(d.status==='pending'&&d.next_at?' · 下次尝试 '+date(d.next_at):'')+'</p></div><div class="compact-tail"><span class="'+(d.status==='failed'?'error':d.status==='sent'?'good':'muted')+'">'+esc({sent:'已投递',pending:'等待发送 / 自动重试',failed:'发送失败',paused:'已暂停',cancelled:'已取消'}[d.status]||d.status)+'</span><time>'+esc(d.created?date(d.created):'时间未记录')+'</time></div><div class="compact-delivery-actions">'+(d.status==='failed'?'<button data-retry-delivery="'+esc(d.id)+'">重试投递</button>':'')+(d.job&&!d.job.startsWith('ingest:')?'<button class="text" data-auto-record="'+esc(d.job)+'">查看生成记录</button>':'')+'</div></article></td></tr>').join(''):'<tr><td class="empty" colspan="6">暂无匹配的投递记录。启用目录规则通知后，这里显示发送状态。</td></tr>';icons()}
   await loadAutomation({signal:request.signal});
- }catch(e){if(e.name!=='AbortError'&&request.current()){$('records-error').textContent=e.message+'。请刷新重试。';$('records-error').hidden=false}}
+ }catch(e){if(e.name!=='AbortError'&&request.current()){recordsResetList('通知投递暂时无法读取，请点击「刷新记录」重试。');$('records-status').textContent='读取失败';$('records-error').textContent=e.message+'。请刷新重试。';$('records-error').hidden=false}}
  finally{if(request.current())$('records-table-panel').removeAttribute('aria-busy');request.finish()}
 }
 document.addEventListener('click',event=>{

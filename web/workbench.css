@@ -42,6 +42,8 @@
 #records-table-panel .records-table{display:block;min-width:0;width:100%;table-layout:fixed}
 #records-table-panel .records-table thead{display:none}
 #records-table-panel .records-table tbody{display:block;width:100%}
+#records-table-panel .records-table tr:has(>td.empty){display:block;width:100%;padding:0;border:0;border-radius:0;background:transparent}
+#records-table-panel .records-table td.empty{display:block;width:100%;max-width:none;padding:32px 21px;margin:0;border:0;background:transparent;line-height:1.8}
 #records-table-panel .records-table tr.compact-record-row{display:block;width:100%;border:0;border-radius:0;padding:0;background:transparent}
 #records-table-panel .records-table tr.compact-record-row+tr{border-top:1px solid var(--border)}
 #records-table-panel .records-table tr.compact-record-row>td{display:block;width:100%;max-width:none;padding:0;margin:0;border:0}

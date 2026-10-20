@@ -2,7 +2,7 @@
 
 面向 NAS 的网盘 STRM 生成与播放入口服务。直接接入移动云盘、夸克、阿里云盘和 115；Go + SQLite + 内嵌网页，单容器运行，默认端口 **8796**。
 
-当前源码版本：**0.11.10**。本仓库作为邀请内测的私有源码仓库，仅受邀 GitHub 账号可以访问。软件许可证仍为 AGPL-3.0，详见下方许可说明。
+当前源码版本：**0.11.11**。本仓库作为邀请内测的私有源码仓库，仅受邀 GitHub 账号可以访问。软件许可证仍为 AGPL-3.0，详见下方许可说明。
 
 ## 主要功能
 
@@ -43,6 +43,7 @@ docker compose up -d --build
 - [开发、测试与前端构建](docs/DEVELOPMENT.md)
 - [115 Cookie 通道](docs/115-cookie.md)
 - [Hermes Telegram 插件](docs/hermes-telegram.md)
+- [0.11.11 更新说明](docs/release-0.11.11.md)
 - [0.11.10 更新说明](docs/release-0.11.10.md)
 - [第三方代码与素材来源](THIRD_PARTY.md)
 

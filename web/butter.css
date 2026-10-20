@@ -108,6 +108,9 @@
 [data-theme=butter] tr:hover td{background:var(--soft)}
 [data-theme=butter] .notice{background:var(--soft);border:1px solid var(--border);color:var(--ink)}
 [data-theme=butter] .notice.error{background:color-mix(in srgb,var(--danger) 8%,var(--panel));color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
+[data-theme=butter][data-style=glass] .notice.error{background:rgba(255,255,255,.88);color:#8b1a2c;border-color:var(--glass-border);backdrop-filter:var(--glass-filter);-webkit-backdrop-filter:var(--glass-filter)}
+[data-theme=butter][data-style=glass][data-glass-text=light] .notice.error{background:rgba(23,33,43,.88);color:#ffc7cf}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){[data-theme=butter][data-style=glass][data-glass-text] .notice.error{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}
 [data-theme=butter] .skip,[data-theme=butter] #toast{background:var(--panel);border-color:var(--border);color:var(--ink)}
 [data-theme=butter] .skip{z-index:100}
 [data-theme=butter] .generation-tabs button[aria-selected=true],[data-theme=butter] .records-tabs button[aria-selected=true]{color:var(--palette-strong);border-color:var(--palette-strong)}

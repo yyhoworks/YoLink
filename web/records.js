@@ -14,9 +14,17 @@ function recordsLeave(){recordsScope?.dispose();recordsScope=null;recordsCloseDe
 function recordsCloseDetail(){recordsScope?.cancel('trace');recordGroupContext=null;$('records-detail').hidden=true;$('records-detail').removeAttribute('aria-busy')}
 function recordsPopulateAccounts(){const el=$('records-account'),old=el.value;el.innerHTML='<option value="">全部网盘</option>'+state.accounts.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');el.value=old}
 function recordsFilters(){const params=new URLSearchParams({kind:recordsKind==='tools'?'direct':recordsKind,q:$('records-search').value.trim(),account:$('records-account').value,outcome:$('records-outcome').value,event:$('records-event').value,days:$('records-days').value,page:String(recordsPage),limit:$('records-limit').value});if(recordsKind==='playback')params.set('summary','1');if(recordsKind==='tools')params.set('scope','diagnostic');Object.entries(recordsContext).forEach(([k,v])=>params.set(k,v));return params}
+function recordsResetList(message){
+ recordsRenderKey='';recordsPages=0;
+ $('records-head').innerHTML='';$('records-body').innerHTML='<tr><td colspan="6" class="empty"></td></tr>';
+ $('records-body').querySelector('td').textContent=message;
+ $('records-page').textContent='';$('records-prev').disabled=true;$('records-next').disabled=true;
+ $('records-write-error').hidden=true;
+}
 function recordsSwitch(kind){
  if(kind==='direct')kind='tools';
  recordsKind=kind;recordsPage=1;recordsCloseDetail();
+ recordsResetList('正在读取'+recordNames[kind]+'…');
  document.querySelectorAll('[data-record-kind]').forEach(button=>{const selected=button.dataset.recordKind===kind;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1});
  $('records-table-panel').setAttribute('aria-labelledby','records-'+kind+'-tab');
  const outcomes=kind==='generation'?['created','skipped','failed','partial','completed','preview','existing']:kind==='playback'?['redirected','metadata','proxied','failed']:kind==='deliveries'?['pending','sent','failed','paused','cancelled']:['resolved','readable','proxy_required','failed'];
@@ -35,7 +43,7 @@ async function recordsLoad(page=1){
  try{const data=await api('/api/records?'+recordsFilters(),undefined,{signal:request.signal});if(!request.current())return;
  recordsPage=data.page;recordsPages=data.pages;$('records-status').textContent=recordsKind==='playback'?`${data.total} 组 · ${data.request_total} 次请求`:`${data.total} 条记录`;$('records-page').textContent=data.total?`${data.page} / ${data.pages} 页`:'暂无记录';$('records-prev').disabled=data.page<=1;$('records-next').disabled=!data.pages||data.page>=data.pages;
  $('records-write-error').textContent=data.write_error||'';$('records-write-error').hidden=!data.write_error;recordsRender(data.items);
- }catch(err){if(err.name==='AbortError'||!request.current())return;$('records-error').textContent=err.message+'。可点击刷新重试。';$('records-error').hidden=false;$('records-status').textContent='读取失败'}finally{if(request.current())$('records-table-panel').removeAttribute('aria-busy');request.finish()}
+ }catch(err){if(err.name==='AbortError'||!request.current())return;recordsResetList(recordNames[recordsKind]+'暂时无法读取，请点击「刷新记录」重试。');$('records-error').textContent=err.message+'。可点击刷新重试。';$('records-error').hidden=false;$('records-status').textContent='读取失败'}finally{if(request.current())$('records-table-panel').removeAttribute('aria-busy');request.finish()}
 }
 function recordIdentity(r){return `<button class="record-name" data-record-media="${esc(r.media)}" data-record-request="${esc(r.request)}" ${r.group_id?'data-record-group="'+esc(r.group_id)+'"':''} ${r.media?'':'disabled'} title="查看请求、解析和响应详情">${esc(r.name||'未知文件')}</button><small>${r.group_id?'播放请求汇总':esc(recordEvents[r.event]||r.event)}${r.rule_name?' · '+esc(r.rule_name):''}${r.trigger?' · '+esc(recordTriggers[r.trigger]||r.trigger):''}</small>${r.group_id?'<small class="record-summary-mobile">'+r.request_count+' 次请求 · 解析 '+r.resolve_count+' 次 · 复用 '+r.reuse_count+' 次</small>':''}`}
 function recordResult(r){return `<span class="${recClass(r)}">${esc(recLabel(r))}</span><small>${esc(r.kind==='generation'?(r.error||r.note):recMode(r))}${r.http?' · HTTP '+r.http:''}${r.bytes?' · '+r.bytes.toLocaleString()+' 字节':''}</small>${r.kind!=='generation'&&r.error?`<small class="record-error">${esc(r.error)}</small>`:''}`}
