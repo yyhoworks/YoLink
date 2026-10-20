@@ -22,6 +22,7 @@ import (
 )
 
 type Account struct {
+	Revision   int64             `json:"revision"`
 	ID         string            `json:"id"`
 	Name       string            `json:"name"`
 	Provider   string            `json:"provider"`
@@ -146,9 +147,26 @@ func keyFile(dir, name string, n int) ([]byte, error) {
 	}
 	return b, ce
 }
-func openStore(dir string) (*Store, error) {
+func openStore(dir string) (result *Store, err error) {
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return nil, e
+	}
+	db, e := sql.Open("sqlite", filepath.Join(dir, "strmlink.db"))
+	if e != nil {
+		return nil, e
+	}
+	defer func() {
+		if result == nil {
+			_ = db.Close()
+		}
+	}()
+	db.SetMaxOpenConns(1)
+	var version int
+	if e = db.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
+		return nil, e
+	}
+	if version < 0 || version > currentSchemaVersion {
+		return nil, errors.New("数据库版本高于当前程序或版本无效，请使用匹配版本；未修改数据库")
 	}
 	key, e := keyFile(dir, "credentials.key", 32)
 	if e != nil {
@@ -166,32 +184,8 @@ func openStore(dir string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	db, e := sql.Open("sqlite", filepath.Join(dir, "strmlink.db"))
-	if e != nil {
-		return nil, e
-	}
-	db.SetMaxOpenConns(1)
 	s := &Store{db: db, box: box, playKey: play, dir: dir}
-	_, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
- CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, payload TEXT NOT NULL, secret BLOB NOT NULL);
- CREATE TABLE IF NOT EXISTS rules(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS media(id TEXT PRIMARY KEY, account TEXT NOT NULL, remote_id TEXT NOT NULL, source_path TEXT NOT NULL, payload TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS media_path ON media(account, source_path);
- CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, created INTEGER NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS outputs(path TEXT PRIMARY KEY, media TEXT NOT NULL, hash TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS settings(id TEXT PRIMARY KEY, value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS account_reports(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS ingest_events(id TEXT PRIMARY KEY,rule TEXT NOT NULL,source_path TEXT NOT NULL,status TEXT NOT NULL,job TEXT NOT NULL,error TEXT NOT NULL,created INTEGER NOT NULL,revision INTEGER NOT NULL);`)
-	if e != nil {
-		db.Close()
-		return nil, e
-	}
-	if e = s.initFeatures(); e != nil {
-		db.Close()
-		return nil, e
-	}
-	if e = s.initConnectionSchema(); e != nil {
-		db.Close()
+	if e = migrateSchema(db); e != nil {
 		return nil, e
 	}
 	jobs, e := s.jobs(10000)

@@ -35,7 +35,19 @@ type NotificationChannel struct {
 }
 
 func (s *Store) initConnectionSchema() error {
-	rows, err := s.db.Query("PRAGMA table_info(deliveries)")
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = migrateConnectionSchema(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func migrateConnectionSchema(db schemaRunner) error {
+	rows, err := db.Query("PRAGMA table_info(deliveries)")
 	if err != nil {
 		return err
 	}
@@ -50,24 +62,20 @@ func (s *Store) initConnectionSchema() error {
 		}
 		hasChannel = hasChannel || name == "channel"
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	rows.Close()
 	if !hasChannel {
-		tx, er := s.db.Begin()
-		if er != nil {
-			return er
-		}
-		defer tx.Rollback()
-		_, er = tx.Exec(`CREATE TABLE deliveries_v2(id TEXT PRIMARY KEY,job TEXT,kind TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at INTEGER,payload TEXT,error TEXT DEFAULT '',channel TEXT NOT NULL DEFAULT '',channel_name TEXT NOT NULL DEFAULT '',channel_version INTEGER NOT NULL DEFAULT 1,created INTEGER NOT NULL DEFAULT 0,UNIQUE(job,kind,channel));
+		_, er := db.Exec(`CREATE TABLE deliveries_v2(id TEXT PRIMARY KEY,job TEXT,kind TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at INTEGER,payload TEXT,error TEXT DEFAULT '',channel TEXT NOT NULL DEFAULT '',channel_name TEXT NOT NULL DEFAULT '',channel_version INTEGER NOT NULL DEFAULT 1,created INTEGER NOT NULL DEFAULT 0,UNIQUE(job,kind,channel));
 INSERT INTO deliveries_v2(id,job,kind,status,attempts,next_at,payload,error,channel,channel_name) SELECT id,job,kind,status,attempts,next_at,payload,error,CASE WHEN kind='webhook' THEN 'legacy-webhook' ELSE '' END,CASE WHEN kind='webhook' THEN '原通知连接' ELSE '媒体库刷新' END FROM deliveries ORDER BY rowid;
 DROP TABLE deliveries;ALTER TABLE deliveries_v2 RENAME TO deliveries;`)
 		if er != nil {
 			return er
 		}
-		if er = tx.Commit(); er != nil {
-			return er
-		}
 	}
-	_, err = s.db.Exec(`CREATE TABLE IF NOT EXISTS event_clients(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_hash TEXT NOT NULL,enabled INTEGER NOT NULL,rules TEXT NOT NULL,created INTEGER NOT NULL,last_used INTEGER NOT NULL DEFAULT 0);
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS event_clients(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_hash TEXT NOT NULL,enabled INTEGER NOT NULL,rules TEXT NOT NULL,created INTEGER NOT NULL,last_used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS event_calls(id INTEGER PRIMARY KEY AUTOINCREMENT,client TEXT NOT NULL,name TEXT NOT NULL,created INTEGER NOT NULL,action TEXT NOT NULL,status INTEGER NOT NULL);`)
 	return err
 }

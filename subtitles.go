@@ -7,16 +7,20 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 )
 
 var subtitleExtensions = map[string]bool{".srt": true, ".ass": true, ".ssa": true, ".vtt": true}
 
-func (e *Engine) copyMediaSubtitles(ctx context.Context, a Account, files []Entry, media Entry, relative string, r Rule, j *Job) {
+func (e *Engine) copyMediaSubtitles(ctx context.Context, a Account, files []Entry, media Entry, relative string, r Rule, j *Job) error {
 	if !r.CopySubtitles || j.DryRun {
-		return
+		return nil
 	}
 	stem := strings.TrimSuffix(media.Name, path.Ext(media.Name))
 	for _, f := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if r.Filter.excluded(f.Name, path.Join(relative, f.Name)) {
 			continue
 		}
@@ -51,8 +55,15 @@ func (e *Engine) copyMediaSubtitles(ctx context.Context, a Account, files []Entr
 			}
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
 			j.Errors++
 			j.Message = "字幕复制失败：" + f.Name
+			j.ErrorKind = classifyError(err)
 			if len(j.Failures) < 20 {
 				j.Failures = append(j.Failures, j.Message+"（"+err.Error()+"）")
 			}
@@ -62,6 +73,7 @@ func (e *Engine) copyMediaSubtitles(ctx context.Context, a Account, files []Entr
 		}
 		e.generationActivity(a, r, *j, f, path.Join(r.SourcePath, relative, f.Name), generationOutputName(e, path.Join(r.Output, relative, name)), outcome, "subtitle", err)
 	}
+	return nil
 }
 func readSubtitle(ctx context.Context, target PlaybackTarget) ([]byte, error) {
 	return readCompanion(ctx, target, 8<<20, false)
@@ -73,9 +85,9 @@ var nonMediaExtensions = map[string]bool{
 	".gif": true, ".bmp": true, ".tbn": true, ".json": true, ".xml": true, ".txt": true,
 }
 
-func (e *Engine) copyNonMedia(ctx context.Context, a Account, f Entry, relative string, r Rule, j *Job) {
+func (e *Engine) copyNonMedia(ctx context.Context, a Account, f Entry, relative string, r Rule, j *Job) error {
 	if !r.CopyNonMedia || j.DryRun || f.Dir || !nonMediaExtensions[strings.ToLower(path.Ext(f.Name))] {
-		return
+		return nil
 	}
 	name, err := safeName(f.Name)
 	outcome := "skipped"
@@ -108,8 +120,15 @@ func (e *Engine) copyNonMedia(ctx context.Context, a Account, f Entry, relative 
 		}
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
 		j.Errors++
 		j.Message = "非媒体文件复制失败：" + f.Name
+		j.ErrorKind = classifyError(err)
 		if len(j.Failures) < 20 {
 			j.Failures = append(j.Failures, j.Message+"（"+err.Error()+"）")
 		}
@@ -118,6 +137,7 @@ func (e *Engine) copyNonMedia(ctx context.Context, a Account, f Entry, relative 
 		outcome = "failed"
 	}
 	e.generationActivity(a, r, *j, f, path.Join(r.SourcePath, relative, f.Name), generationOutputName(e, path.Join(r.Output, relative, name)), outcome, "nonmedia", err)
+	return nil
 }
 
 func readCompanion(ctx context.Context, target PlaybackTarget, maxBytes int64, allowJSON bool) ([]byte, error) {
@@ -130,11 +150,11 @@ func readCompanion(ctx context.Context, target PlaybackTarget, maxBytes int64, a
 	req.Header = target.Headers.Clone()
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, errors.New("文件下载失败")
+		return nil, networkError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, errors.New("文件下载接口拒绝请求")
+		return nil, cloudHTTPError(resp.StatusCode, resp.Header.Get("Retry-After"), time.Now())
 	}
 	kind := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(kind, "text/html") || !allowJSON && strings.Contains(kind, "application/json") {
@@ -142,7 +162,7 @@ func readCompanion(ctx context.Context, target PlaybackTarget, maxBytes int64, a
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return nil, errors.New("文件读取失败")
+		return nil, networkError(err)
 	}
 	if len(data) == 0 || int64(len(data)) > maxBytes {
 		return nil, errors.New("文件为空或超过大小上限")

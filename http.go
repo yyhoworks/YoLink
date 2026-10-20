@@ -372,6 +372,7 @@ func (s *Server) saveAccount(w http.ResponseWriter, r *http.Request) {
 	if a.ID == "" {
 		a.ID = randomID()
 		a.Disabled = false
+		a.Revision = 1
 	} else {
 		old, e := s.s.account(a.ID)
 		if e != nil {
@@ -386,6 +387,7 @@ func (s *Server) saveAccount(w http.ResponseWriter, r *http.Request) {
 			a.Secrets = map[string]string{}
 		}
 		a.Disabled = old.Disabled
+		a.Revision = old.Revision + 1
 		for k, v := range old.Secrets {
 			if a.Secrets[k] == "" {
 				a.Secrets[k] = v

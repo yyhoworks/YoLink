@@ -329,7 +329,11 @@ func (e *Engine) run(id string) {
 		j.Errors++
 	}
 	if j.Status == "failed" || j.Status == "partial" {
-		j.ErrorKind = errorKind(j.Message)
+		if err != nil {
+			j.ErrorKind = classifyError(err)
+		} else if j.ErrorKind == "" {
+			j.ErrorKind = errorKind(j.Message)
+		}
 	} else {
 		j.ErrorKind = ""
 	}

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,12 +19,19 @@ type ScanDir struct {
 	Relative string `json:"relative"`
 }
 type ScanCheckpoint struct {
-	Todo    []ScanDir
-	Current *ScanDir
-	Files   []Entry
-	Index   int
-	Visited map[string]bool
-	Claimed map[string]string
+	Format         int
+	Snapshot       bool
+	Todo           []ScanDir
+	Current        *ScanDir
+	Files          []Entry
+	Index          int
+	Visited        map[string]bool
+	Claimed        map[string]string
+	persisted      bool
+	structureDirty bool
+	filesDirty     bool
+	claimPath      string
+	claimMedia     string
 }
 type PreviewItem struct {
 	Source  string `json:"source"`
@@ -51,13 +57,20 @@ func (e *Engine) saveScan(j Job, cp *ScanCheckpoint) error {
 	if err = saveJobTx(tx, j); err != nil {
 		return err
 	}
-	if _, err = tx.Exec("INSERT INTO job_checkpoints VALUES(?,?) ON CONFLICT(job) DO UPDATE SET payload=excluded.payload", j.ID, scanJSON(cp)); err != nil {
+	if err = saveCheckpointTx(tx, j.ID, cp); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	cp.persisted, cp.structureDirty, cp.filesDirty = true, false, false
+	cp.claimPath, cp.claimMedia = "", ""
+	return nil
 }
 func (e *Engine) noteFailure(j *Job, d ScanDir, message string) {
-	j.ErrorKind = errorKind(message)
+	if j.ErrorKind == "" {
+		j.ErrorKind = errorKind(message)
+	}
 	_, _ = e.s.db.Exec("INSERT INTO job_failures VALUES(?,?,?,?) ON CONFLICT(job,folder,source) DO UPDATE SET message=excluded.message", j.ID, d.ID, d.Source, cleanRecordText(message, 300))
 }
 
@@ -107,9 +120,8 @@ func (e *Engine) retryDirectories(j Job) ([]ScanDir, error) {
 		}
 		return nil
 	}
-	var raw string
 	var cp ScanCheckpoint
-	if e.s.db.QueryRow("SELECT payload FROM job_checkpoints WHERE job=?", j.ID).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &cp) == nil {
+	if err := e.s.loadCheckpoint(j.ID, &cp); err == nil {
 		if cp.Current != nil {
 			if err := add(*cp.Current); err != nil {
 				return nil, err
@@ -120,6 +132,8 @@ func (e *Engine) retryDirectories(j Job) ([]ScanDir, error) {
 				return nil, err
 			}
 		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
 	rows, err := e.s.db.Query("SELECT folder,source FROM job_failures WHERE job=?", j.ID)
 	if err != nil {
@@ -189,12 +203,7 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 	if len(j.RetryDirs) > 0 {
 		cp.Todo = j.RetryDirs
 	}
-	var raw string
-	if err := e.s.db.QueryRow("SELECT payload FROM job_checkpoints WHERE job=?", j.ID).Scan(&raw); err == nil {
-		if json.Unmarshal([]byte(raw), &cp) != nil {
-			return errors.New("断点读取失败，请重新生成")
-		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	if err := e.s.loadCheckpoint(j.ID, &cp); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	// Also repair output paths in pre-fix checkpoints on automatic resume.
@@ -216,6 +225,8 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 	if cp.Claimed == nil {
 		cp.Claimed = map[string]string{}
 	}
+	// Canonical path repairs above must be persisted even on a migrated cursor.
+	cp.structureDirty = true
 	for cp.Current != nil || len(cp.Todo) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -232,6 +243,7 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 			cp.Current = &d
 			cp.Files = nil
 			cp.Index = 0
+			cp.structureDirty, cp.filesDirty = true, true
 			if err := e.saveScan(*j, &cp); err != nil {
 				return err
 			}
@@ -248,6 +260,7 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 			if cp.Files == nil {
 				cp.Files = []Entry{}
 			}
+			cp.structureDirty, cp.filesDirty = true, true
 			if err = e.saveScan(*j, &cp); err != nil {
 				return err
 			}
@@ -261,8 +274,13 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 			relative := path.Join(d.Relative, f.Name)
 			j.CurrentPath = source
 			before := j.Errors
+			committed := *j
 			err := e.scanEntry(ctx, a, r, j, d, f, source, relative, &cp)
 			if err != nil {
+				// The item cursor has not advanced. Persisting its tentative
+				// counters would count it twice on restart and could satisfy a
+				// generation limit before later media have been processed.
+				*j = committed
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -274,6 +292,7 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 			}
 			cp.Index++
 			if err = e.saveScan(*j, &cp); err != nil {
+				*j = committed
 				return err
 			}
 			if j.Limit > 0 && j.Seen >= j.Limit {
@@ -284,6 +303,7 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 		cp.Current = nil
 		cp.Files = nil
 		cp.Index = 0
+		cp.structureDirty, cp.filesDirty = true, true
 		if err := e.saveScan(*j, &cp); err != nil {
 			return err
 		}
@@ -306,6 +326,7 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 	}
 	if f.Dir {
 		cp.Todo = append(cp.Todo, ScanDir{f.ID, source, path.Join(d.Relative, name)})
+		cp.structureDirty = true
 		return nil
 	}
 	if !r.Filter.media(f) {
@@ -315,7 +336,7 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 				addPreview(j, source, "", "filtered")
 			}
 		} else {
-			e.copyNonMedia(ctx, a, f, d.Relative, r, j)
+			return e.copyNonMedia(ctx, a, f, d.Relative, r, j)
 		}
 		return nil
 	}
@@ -339,6 +360,7 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 		return nil
 	}
 	cp.Claimed[dest] = mid
+	cp.claimPath, cp.claimMedia = dest, mid
 	content := []byte(e.s.setting("public_base", "") + "/s/" + mid + "/" + url.PathEscape(f.Name) + "?k=" + e.s.signature(mid) + "\n")
 	if j.DryRun {
 		outcome := e.previewOutput(dest, mid, content)
@@ -362,7 +384,7 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 	if err != nil {
 		j.Errors++
 		j.Message = err.Error()
-		j.ErrorKind = errorKind(err.Error())
+		j.ErrorKind = classifyError(err)
 		if len(j.Failures) < 20 {
 			j.Failures = append(j.Failures, err.Error())
 		}
@@ -384,7 +406,7 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 		if dbErr != nil {
 			return errors.New("保存输出明细失败")
 		}
-		e.copyMediaSubtitles(ctx, a, cp.Files, f, d.Relative, r, j)
+		return e.copyMediaSubtitles(ctx, a, cp.Files, f, d.Relative, r, j)
 	}
 	return nil
 }

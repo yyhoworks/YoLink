@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,6 +15,7 @@ type QuotaUsage struct {
 	Checked int64 `json:"checked"`
 }
 type AccountReport struct {
+	Revision   int64       `json:"revision"`
 	Checked    int64       `json:"checked"`
 	Reachable  bool        `json:"reachable"`
 	Entries    int         `json:"entries"`
@@ -26,7 +28,7 @@ type quotaCloud interface {
 }
 
 func (s *Store) accountReports() (map[string]AccountReport, error) {
-	rows, e := s.db.Query("SELECT id,payload FROM account_reports")
+	rows, e := s.db.Query("SELECT r.id,r.payload FROM account_reports r JOIN accounts a ON a.id=r.id WHERE COALESCE(json_extract(r.payload,'$.revision'),0)=COALESCE(json_extract(a.payload,'$.revision'),0)")
 	if e != nil {
 		return nil, e
 	}
@@ -45,26 +47,46 @@ func (s *Store) accountReports() (map[string]AccountReport, error) {
 	}
 	return out, rows.Err()
 }
-func (s *Store) updateAccountReport(id string, fn func(*AccountReport)) (AccountReport, error) {
+
+var errAccountReportStale = errors.New("检测期间账号配置已改变，请重新检测")
+
+func (s *Store) updateAccountReport(id string, fn func(*AccountReport), expectedRevision ...int64) (AccountReport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var raw string
 	var report AccountReport
-	if _, e := s.account(id); e != nil {
+	tx, e := s.db.Begin()
+	if e != nil {
+		return report, e
+	}
+	defer tx.Rollback()
+	var revision int64
+	if e = tx.QueryRow("SELECT COALESCE(json_extract(payload,'$.revision'),0) FROM accounts WHERE id=?", id).Scan(&revision); e != nil {
 		return report, errors.New("账号不存在")
 	}
-	if e := s.db.QueryRow("SELECT payload FROM account_reports WHERE id=?", id).Scan(&raw); e == nil {
+	if len(expectedRevision) > 0 && expectedRevision[0] != revision {
+		return report, errAccountReportStale
+	}
+	if e := tx.QueryRow("SELECT payload FROM account_reports WHERE id=?", id).Scan(&raw); e == nil {
 		if e = json.Unmarshal([]byte(raw), &report); e != nil {
 			return report, e
 		}
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return report, e
 	}
+	if report.Revision != revision {
+		report = AccountReport{}
+	}
+	report.Revision = revision
 	fn(&report)
 	b, e := json.Marshal(report)
 	if e != nil {
 		return report, e
 	}
-	_, e = s.db.Exec("INSERT INTO account_reports VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", id, string(b))
-	return report, e
+	if _, e = tx.Exec("INSERT INTO account_reports VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", id, string(b)); e != nil {
+		return report, e
+	}
+	return report, tx.Commit()
 }
 func (s *Server) accountForRequest(w http.ResponseWriter, r *http.Request) (Account, bool) {
 	a, e := s.s.account(r.PathValue("id"))
@@ -94,8 +116,12 @@ func (s *Server) checkAccount(w http.ResponseWriter, r *http.Request) {
 		if checkErr != nil {
 			v.Error = checkErr.Error()
 		}
-	})
+	}, a.Revision)
 	if e != nil {
+		if errors.Is(e, errAccountReportStale) {
+			fail(w, 409, e.Error())
+			return
+		}
 		fail(w, 500, "连接结果保存失败")
 		return
 	}
@@ -126,8 +152,12 @@ func (s *Server) accountQuota(w http.ResponseWriter, r *http.Request) {
 			usage.Checked = time.Now().Unix()
 			v.Quota = &usage
 		}
-	})
+	}, a.Revision)
 	if e != nil {
+		if errors.Is(e, errAccountReportStale) {
+			fail(w, 409, e.Error())
+			return
+		}
 		fail(w, 500, "容量结果保存失败")
 		return
 	}
@@ -184,7 +214,7 @@ func (s *Server) accountMutation(w http.ResponseWriter, r *http.Request, remove,
 			return
 		}
 	} else {
-		if _, e := s.s.db.Exec("UPDATE accounts SET payload=json_set(payload,'$.disabled',json(?)) WHERE id=?", map[bool]string{true: "false", false: "true"}[enabled], id); e != nil {
+		if _, e := s.s.db.Exec("UPDATE accounts SET payload=json_set(payload,'$.disabled',json(?),'$.revision',COALESCE(json_extract(payload,'$.revision'),0)+1) WHERE id=?", map[bool]string{true: "false", false: "true"}[enabled], id); e != nil {
 			fail(w, 500, "网盘状态保存失败")
 			return
 		}

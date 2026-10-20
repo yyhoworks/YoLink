@@ -97,21 +97,14 @@ func errorKind(message string) string {
 	}
 	return "other"
 }
-func (s *Store) initFeatures() error {
-	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS metric_buckets(bucket INTEGER,kind TEXT,event TEXT,outcome TEXT,cache INTEGER,n INTEGER,millis INTEGER,PRIMARY KEY(bucket,kind,event,outcome,cache));
+
+const featureSchema = `CREATE TABLE IF NOT EXISTS metric_buckets(bucket INTEGER,kind TEXT,event TEXT,outcome TEXT,cache INTEGER,n INTEGER,millis INTEGER,PRIMARY KEY(bucket,kind,event,outcome,cache));
  CREATE TABLE IF NOT EXISTS job_checkpoints(job TEXT PRIMARY KEY,payload TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS job_failures(job TEXT,folder TEXT,source TEXT,message TEXT,PRIMARY KEY(job,folder,source));
  CREATE TABLE IF NOT EXISTS output_details(path TEXT PRIMARY KEY,rule TEXT,job TEXT,created INTEGER,checked INTEGER DEFAULT 0,status TEXT DEFAULT 'unchecked',note TEXT DEFAULT '');
  CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,created INTEGER,title TEXT,body TEXT,level TEXT,read INTEGER DEFAULT 0,dedupe TEXT UNIQUE);
- CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,job TEXT,kind TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at INTEGER,payload TEXT,error TEXT DEFAULT '',UNIQUE(job,kind));`)
-	if err != nil {
-		return err
-	}
-	if s.setting("metrics_since", "") == "" {
-		return s.setSetting("metrics_since", time.Now().UTC().Format(time.RFC3339))
-	}
-	return nil
-}
+ CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,job TEXT,kind TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at INTEGER,payload TEXT,error TEXT DEFAULT '',UNIQUE(job,kind));`
+
 func recordMetric(tx *sql.Tx, v Activity) error {
 	if !(v.Kind == "generation" && v.Event == "strm" && v.Outcome == "created") && v.Kind != "playback" && v.Kind != "direct" {
 		return nil

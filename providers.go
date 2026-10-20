@@ -86,17 +86,20 @@ func networkError(err error) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errors.New("网盘请求超时，请稍后重试")
+		return &CloudError{Kind: "network", Code: "timeout", Retryable: true, Message: "网盘请求超时，请稍后重试", cause: context.DeadlineExceeded}
 	}
-	return errors.New("网盘连接失败，请检查容器网络或授权服务")
+	return &CloudError{Kind: "network", Code: "connection", Retryable: true, Message: "网盘连接失败，请检查容器网络或授权服务"}
 }
-func (p *Providers) lock(id string) *sync.Mutex {
-	v, _ := p.locks.LoadOrStore(id, &sync.Mutex{})
-	return v.(*sync.Mutex)
+func (p *Providers) lock(id string) *accountGate {
+	v, _ := p.locks.LoadOrStore(id, &accountGate{})
+	return v.(*accountGate)
 }
 func (p *Providers) with(ctx context.Context, id string, fn func(*Account) error) (err error) {
 	mu := p.lock(id)
-	mu.Lock()
+	high, _ := ctx.Value(playbackPriorityKey{}).(bool)
+	if err = mu.acquire(ctx, high); err != nil {
+		return err
+	}
 	defer mu.Unlock()
 	a, e := p.s.account(id)
 	if e != nil {
@@ -169,7 +172,7 @@ func (p *Providers) requestCookies(ctx context.Context, method, u string, body a
 		receive(resp.Cookies())
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("网盘接口返回 HTTP %d，请检查授权和限流", resp.StatusCode)
+		return nil, cloudHTTPError(resp.StatusCode, resp.Header.Get("Retry-After"), time.Now())
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if e != nil {
@@ -179,7 +182,7 @@ func (p *Providers) requestCookies(ctx context.Context, method, u string, body a
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 	if dec.Decode(&out) != nil || out == nil {
-		return nil, errors.New("网盘接口响应格式异常")
+		return nil, cloudProtocolError("网盘接口响应格式异常")
 	}
 	return out, nil
 }
@@ -201,13 +204,13 @@ func queryURL(base string, q map[string]string) string {
 }
 func apiSuccess(r object) error {
 	if c := str(r["code"]); c != "" && c != "0" && c != "200" {
-		return fmt.Errorf("网盘接口拒绝请求（%s），请重新授权或稍后重试", safeCode(c))
+		return cloudAPIError(c)
 	}
 	if c := num(r["errno"]); c != 0 {
-		return fmt.Errorf("网盘接口错误 %d，请检查授权或账号权益", c)
+		return &CloudError{Kind: "other", Code: strconv.FormatInt(c, 10), Message: fmt.Sprintf("网盘接口错误 %d，请检查账号权益或通道状态", c)}
 	}
 	if n := num(r["status"]); n >= 400 || n < 0 {
-		return fmt.Errorf("网盘接口状态 %d，请检查授权", n)
+		return cloudAPIError(str(r["status"]))
 	}
 	return nil
 }
@@ -464,56 +467,112 @@ func (p *Providers) ali(ctx context.Context, a *Account, path string, body any) 
 
 func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Entry, err error) {
 	entries = []Entry{}
-	err = p.with(ctx, aid, func(a *Account) error {
-		if parent == "" {
-			parent = a.Root
-		}
-		if a.Provider == "115" {
-			var e error
-			entries, e = p.list115(ctx, a, parent)
-			return e
-		}
-		cursor := ""
-		seen := map[string]bool{}
-		pages := map[string]bool{}
-		for page := 0; page < 10000; page++ {
+	cursor := ""
+	seen := map[string]bool{}
+	pages := map[string]bool{}
+	var revision int64
+	expectedTotal := int64(-1)
+	offset := 0
+	for page := 0; page < 10000; page++ {
+		done := false
+		err = p.with(ctx, aid, func(a *Account) error {
+			if page == 0 {
+				revision = a.Revision
+			} else if revision != a.Revision {
+				return &CloudError{Kind: "configuration", Code: "account_changed", Message: "扫描期间账号配置已改变，请重新扫描"}
+			}
+			if parent == "" {
+				parent = a.Root
+			}
+			if a.Provider == "115" {
+				batch, total, e := p.list115Page(ctx, a, parent, offset)
+				if e != nil {
+					return e
+				}
+				if expectedTotal >= 0 && expectedTotal != total {
+					return cloudProtocolError("目录总数在扫描期间发生变化，请重新扫描")
+				}
+				expectedTotal = total
+				for _, f := range batch {
+					if seen[f.ID] {
+						return cloudProtocolError("目录分页包含重复条目，请重新扫描")
+					}
+					seen[f.ID] = true
+					entries = append(entries, f)
+				}
+				offset += len(batch)
+				if int64(len(entries)) > total {
+					return cloudProtocolError("目录条目超过返回总数，请重新扫描")
+				}
+				done = int64(len(entries)) == total
+				if !done && len(batch) == 0 {
+					return cloudProtocolError("115 目录分页提前结束，请稍后重试")
+				}
+				return nil
+			}
 			var r object
 			var e error
 			var rows []any
 			var next string
 			var total int64
 			var data object
+			var listValue, totalValue, cursorValue any
 			switch a.Provider {
 			case "139":
 				r, e = p.mobile(ctx, a, a.Secrets["api_host"]+"/file/list", object{"imageThumbnailStyleList": []string{"Small"}, "orderBy": "updated_at", "orderDirection": "DESC", "pageInfo": object{"pageCursor": cursor, "pageSize": 100}, "parentFileId": parent})
 				data = obj(r["data"])
-				rows = arr(data["items"])
-				next = str(data["nextPageCursor"])
+				listValue, cursorValue = data["items"], data["nextPageCursor"]
 			case "139old":
-				r, e = p.mobile(ctx, a, "https://yun.139.com/orchestration/personalCloud/catalog/v1.0/getDisk", object{"catalogID": parent, "sortDirection": 1, "startNumber": page*100 + 1, "endNumber": (page + 1) * 100, "filterType": 0, "catalogSortType": 0, "contentSortType": 0, "commonAccountInfo": object{"account": a.Secrets["phone"], "accountType": 1}})
+				r, e = p.mobile(ctx, a, "https://yun.139.com/orchestration/personalCloud/catalog/v1.0/getDisk", object{"catalogID": parent, "sortDirection": 1, "startNumber": offset + 1, "endNumber": offset + 100, "filterType": 0, "catalogSortType": 0, "contentSortType": 0, "commonAccountInfo": object{"account": a.Secrets["phone"], "accountType": 1}})
 				data = obj(obj(r["data"])["getDiskResult"])
-				rows = append(arr(data["catalogList"]), arr(data["contentList"])...)
-				total = num(data["nodeCount"])
+				if e == nil {
+					dirs, dirOK := data["catalogList"].([]any)
+					files, fileOK := data["contentList"].([]any)
+					if !dirOK || !fileOK {
+						return cloudProtocolError("移动旧个人云目录响应缺少有效列表")
+					}
+					listValue = append(dirs, files...)
+					totalValue = data["nodeCount"]
+				}
 			case "quark":
 				r, e = p.quark(ctx, a, "GET", "/file/sort", nil, map[string]string{"pdir_fid": parent, "_size": "100", "_page": strconv.Itoa(page + 1), "_fetch_total": "1", "fetch_all_file": "1", "fetch_risk_file_name": "1", "_sort": "file_type:asc,file_name:asc"})
 				data = obj(r["data"])
-				rows = arr(data["list"])
-				total = num(obj(r["metadata"])["_total"])
-				if total == 0 {
-					total = num(obj(r["metadata"])["total"])
+				listValue = data["list"]
+				totalValue = obj(r["metadata"])["_total"]
+				if totalValue == nil {
+					totalValue = obj(r["metadata"])["total"]
 				}
 			case "quarktv":
 				r, e = p.tv(ctx, a, "/file", map[string]string{"method": "list", "parent_fid": parent, "page_index": strconv.Itoa(page), "page_size": "100", "order_by": "1", "desc": "0", "list_all": "0"})
 				data = obj(r["data"])
-				rows = arr(data["files"])
-				total = num(data["total_count"])
+				listValue, totalValue = data["files"], data["total_count"]
 			case "ali":
 				r, e = p.ali(ctx, a, "/adrive/v1.0/openFile/list", object{"drive_id": a.Drive, "parent_file_id": parent, "limit": 100, "marker": cursor, "order_by": "name", "order_direction": "ASC"})
-				rows = arr(r["items"])
-				next = str(r["next_marker"])
+				listValue, cursorValue = r["items"], r["next_marker"]
 			}
 			if e != nil {
 				return e
+			}
+			var ok bool
+			rows, ok = listValue.([]any)
+			if !ok {
+				return cloudProtocolError("网盘目录响应缺少有效条目列表")
+			}
+			cursorBased := a.Provider == "139" || a.Provider == "ali"
+			if cursorBased {
+				next, ok = cursorValue.(string)
+				if !ok {
+					return cloudProtocolError("网盘目录响应缺少有效分页游标")
+				}
+			} else {
+				total, e = strconv.ParseInt(str(totalValue), 10, 64)
+				if e != nil || total < 0 {
+					return cloudProtocolError("网盘目录响应缺少有效总数")
+				}
+				if expectedTotal >= 0 && expectedTotal != total {
+					return cloudProtocolError("目录总数在扫描期间发生变化，请重新扫描")
+				}
+				expectedTotal = total
 			}
 			for _, v := range rows {
 				x := obj(v)
@@ -536,39 +595,50 @@ func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Ent
 					f = Entry{ID: str(x["file_id"]), Name: str(x["name"]), Dir: str(x["type"]) == "folder", Size: num(x["size"]), Modified: str(x["updated_at"])}
 				}
 				if f.ID == "" || f.Name == "" {
-					return errors.New("网盘目录返回了缺少 ID 或名称的条目")
+					return cloudProtocolError("网盘目录返回了缺少 ID 或名称的条目")
 				}
-				if !seen[f.ID] {
-					entries = append(entries, f)
-					seen[f.ID] = true
+				if seen[f.ID] {
+					return cloudProtocolError("目录分页包含重复条目，请重新扫描")
 				}
+				entries = append(entries, f)
+				seen[f.ID] = true
 			}
-			if a.Provider == "139" || a.Provider == "ali" {
+			offset += len(rows)
+			if cursorBased {
 				if next == "" {
+					done = true
 					return nil
 				}
-				if pages[next] {
-					return errors.New("网盘分页游标重复，已停止扫描")
+				if pages[next] || len(rows) == 0 {
+					return cloudProtocolError("网盘分页游标重复或分页无进展，已停止扫描")
 				}
 				pages[next] = true
 				cursor = next
 			} else {
-				if total > 0 && int64((page+1)*100) >= total {
-					return nil
+				if int64(len(entries)) > total {
+					return cloudProtocolError("目录条目超过返回总数，请重新扫描")
 				}
-				if total == 0 && len(rows) < 100 {
+				if int64(len(entries)) == total {
+					done = true
 					return nil
 				}
 				if len(rows) == 0 {
-					return errors.New("目录分页提前结束，请稍后重试")
+					return cloudProtocolError("目录分页提前结束，请稍后重试")
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return errors.New("目录超过分页上限，请缩小扫描范围")
-	})
-	return
+		if done {
+			return entries, nil
+		}
+	}
+	return nil, cloudProtocolError("目录超过分页上限，请缩小扫描范围")
 }
 func (p *Providers) Resolve(ctx context.Context, m Media) (target PlaybackTarget, err error) {
+	ctx = context.WithValue(ctx, playbackPriorityKey{}, true)
 	err = p.with(ctx, m.Account, func(a *Account) error {
 		var r object
 		var e error

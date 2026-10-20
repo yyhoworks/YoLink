@@ -58,7 +58,7 @@ func check115(r object) error {
 		if code == nil {
 			code = r["errNo"]
 		}
-		return fmt.Errorf("115 请求失败（%s），请检查 Cookie 是否过期、账号权益或风控状态", safeCode(code))
+		return &CloudError{Kind: "other", Code: safeCode(code), Message: fmt.Sprintf("115 请求失败（%s），请检查 Cookie 是否过期、账号权益或风控状态", safeCode(code))}
 	}
 	return nil
 }
@@ -81,52 +81,41 @@ func (p *Providers) request115(ctx context.Context, a *Account, method, endpoint
 	}
 	return r, check115(r)
 }
-func (p *Providers) list115(ctx context.Context, a *Account, parent string) ([]Entry, error) {
+func (p *Providers) list115Page(ctx context.Context, a *Account, parent string, offset int) ([]Entry, int64, error) {
 	if !numeric115ID(parent) {
-		return nil, errors.New("115 目录 ID 应为数字，根目录为 0")
+		return nil, 0, errors.New("115 目录 ID 应为数字，根目录为 0")
 	}
 	entries := []Entry{}
-	seen := map[string]bool{}
-	offset := 0
-	for page := 0; page < 10000; page++ {
-		r, err := p.request115(ctx, a, "GET", queryURL("https://webapi.115.com/files", map[string]string{"cid": parent, "aid": "1", "o": "file_name", "asc": "1", "offset": strconv.Itoa(offset), "limit": "100", "show_dir": "1", "format": "json", "fc_mix": "0"}), nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		rows, ok := r["data"].([]any)
-		if !ok || r["count"] == nil || num(r["count"]) < 0 {
-			return nil, errors.New("115 目录响应缺少条目或总数")
-		}
-		if cid := str(r["cid"]); cid != "" && cid != parent {
-			return nil, errors.New("115 返回的目录与请求不符，已停止扫描")
-		}
-		if r["offset"] != nil && num(r["offset"]) != int64(offset) {
-			return nil, errors.New("115 分页位置异常，已停止扫描")
-		}
-		previous := len(entries)
-		for _, value := range rows {
-			x := obj(value)
-			f := Entry{ID: str(x["fid"]), PickCode: str(x["pc"]), Name: html.UnescapeString(str(x["n"])), Size: num(x["s"]), Modified: str(x["t"])}
-			if f.ID == "" || f.ID == "0" {
-				f.ID, f.Dir = str(x["cid"]), true
-			}
-			if !numeric115ID(f.ID) || f.Name == "" || f.Size < 0 {
-				return nil, errors.New("115 返回了无效的文件条目")
-			}
-			if !seen[f.ID] {
-				entries = append(entries, f)
-				seen[f.ID] = true
-			}
-		}
-		offset += len(rows)
-		if int64(len(entries)) >= num(r["count"]) {
-			return entries, nil
-		}
-		if len(entries) == previous {
-			return nil, errors.New("115 目录分页提前结束或重复，请稍后重试")
+	r, err := p.request115(ctx, a, "GET", queryURL("https://webapi.115.com/files", map[string]string{"cid": parent, "aid": "1", "o": "file_name", "asc": "1", "offset": strconv.Itoa(offset), "limit": "100", "show_dir": "1", "format": "json", "fc_mix": "0"}), nil, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, ok := r["data"].([]any)
+	total, countErr := strconv.ParseInt(str(r["count"]), 10, 64)
+	if !ok || countErr != nil || total < 0 {
+		return nil, 0, cloudProtocolError("115 目录响应缺少条目或总数")
+	}
+	if cid := str(r["cid"]); cid != "" && cid != parent {
+		return nil, 0, cloudProtocolError("115 返回的目录与请求不符，已停止扫描")
+	}
+	if r["offset"] != nil {
+		actual, err := strconv.ParseInt(str(r["offset"]), 10, 64)
+		if err != nil || actual != int64(offset) {
+			return nil, 0, cloudProtocolError("115 分页位置异常，已停止扫描")
 		}
 	}
-	return nil, errors.New("115 目录超过分页上限，请缩小扫描范围")
+	for _, value := range rows {
+		x := obj(value)
+		f := Entry{ID: str(x["fid"]), PickCode: str(x["pc"]), Name: html.UnescapeString(str(x["n"])), Size: num(x["s"]), Modified: str(x["t"])}
+		if f.ID == "" || f.ID == "0" {
+			f.ID, f.Dir = str(x["cid"]), true
+		}
+		if !numeric115ID(f.ID) || f.Name == "" || f.Size < 0 {
+			return nil, 0, cloudProtocolError("115 返回了无效的文件条目")
+		}
+		entries = append(entries, f)
+	}
+	return entries, total, nil
 }
 func (p *Providers) resolve115(ctx context.Context, a *Account, m Media) (PlaybackTarget, error) {
 	if !numeric115ID(m.RemoteID) {

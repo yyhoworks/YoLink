@@ -93,14 +93,12 @@ func cleanRecordText(text string, limit int) string {
 	return text
 }
 
-func (s *Store) initActivities() error {
-	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS activity_events(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,time INTEGER NOT NULL,account TEXT NOT NULL,media TEXT NOT NULL,outcome TEXT NOT NULL,request TEXT NOT NULL,payload TEXT NOT NULL);
+const activitySchema = `CREATE TABLE IF NOT EXISTS activity_events(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,time INTEGER NOT NULL,account TEXT NOT NULL,media TEXT NOT NULL,outcome TEXT NOT NULL,request TEXT NOT NULL,payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS activity_kind_time ON activity_events(kind,time DESC,id DESC);
 CREATE INDEX IF NOT EXISTS activity_media ON activity_events(media,time DESC,id DESC);
-CREATE INDEX IF NOT EXISTS activity_request ON activity_events(request);`)
-	if err != nil {
-		return err
-	}
+CREATE INDEX IF NOT EXISTS activity_request ON activity_events(request);`
+
+func (s *Store) initActivities() error {
 	if s.setting("activity_backfill_v1", "") == "done" {
 		return nil
 	}
