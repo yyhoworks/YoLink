@@ -26,13 +26,14 @@ type PlanItem struct {
 	Original string `json:"original,omitempty"`
 }
 type MaintenancePlan struct {
-	ID        string     `json:"id"`
-	Mode      string     `json:"mode"`
-	Base      string     `json:"base"`
-	Created   int64      `json:"created"`
-	Items     []PlanItem `json:"items"`
-	Directory string     `json:"directory,omitempty"`
-	Prepared  bool       `json:"prepared,omitempty"`
+	RestoreGeneration string     `json:"restore_generation,omitempty"`
+	ID                string     `json:"id"`
+	Mode              string     `json:"mode"`
+	Base              string     `json:"base"`
+	Created           int64      `json:"created"`
+	Items             []PlanItem `json:"items"`
+	Directory         string     `json:"directory,omitempty"`
+	Prepared          bool       `json:"prepared,omitempty"`
 }
 
 func (s *Server) planPath(id string) (string, error) {
@@ -42,6 +43,7 @@ func (s *Server) planPath(id string) (string, error) {
 	return filepath.Join(s.s.dir, "plans", id+".json"), nil
 }
 func (s *Server) savePlan(p MaintenancePlan) error {
+	p.RestoreGeneration = s.s.startupRestore.Generation
 	dest, e := s.planPath(p.ID)
 	if e != nil {
 		return e
@@ -239,6 +241,10 @@ func (s *Server) applyPlan(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, e.Error())
 		return
 	}
+	if s.s.restoreRestricted || p.RestoreGeneration != s.s.startupRestore.Generation {
+		fail(w, 409, "恢复前的预览不能执行，请完成恢复核对并重新预览")
+		return
+	}
 	if p.Base != s.s.setting("public_base", "") {
 		fail(w, 409, "播放入口已改变，请重新预览")
 		return
@@ -390,6 +396,10 @@ func (s *Server) rollbackPlan(w http.ResponseWriter, r *http.Request) {
 	p, e := s.loadPlan(r.PathValue("id"))
 	if e != nil || (p.Mode != "links" && p.Mode != "migration-inplace") {
 		fail(w, 400, "此预览没有可恢复的覆盖备份")
+		return
+	}
+	if s.s.restoreRestricted || p.RestoreGeneration != s.s.startupRestore.Generation {
+		fail(w, 409, "恢复前的预览不能执行，请完成恢复核对并重新预览")
 		return
 	}
 	if p.Mode == "migration-inplace" {

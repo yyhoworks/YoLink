@@ -40,6 +40,8 @@ type Server struct {
 	playHistory     []PlaybackRecord
 	probeClient     *http.Client
 	maintenanceMu   sync.Mutex
+	backupMu        sync.Mutex
+	restart         func()
 }
 
 func newServer(s *Store, e *Engine, p Clouds, data, output string) (*Server, error) {
@@ -130,6 +132,10 @@ func (s *Server) guard(fn http.HandlerFunc) http.HandlerFunc {
 			fail(w, 403, "请求来源不匹配")
 			return
 		}
+		if s.s.restoreRestricted && !restoreReviewRequestAllowed(r) {
+			fail(w, 409, "请先完成恢复核对；当前仅开放查看、密码更新和只读诊断")
+			return
+		}
 		fn(w, r)
 	}
 }
@@ -154,6 +160,10 @@ func (s *Server) handler() http.Handler {
 		jsonOut(w, 200, object{"ok": true})
 	}))
 	mux.HandleFunc("GET /api/state", s.guard(s.state))
+	mux.HandleFunc("POST /api/backups/export", s.guard(s.exportBackup))
+	mux.HandleFunc("GET /api/restore/status", s.guard(s.restoreStatus))
+	mux.HandleFunc("POST /api/restore/import", s.guard(s.importBackup))
+	mux.HandleFunc("POST /api/restore/{action}", s.guard(s.restoreAction))
 	mux.HandleFunc("GET /api/dashboard", s.guard(s.dashboard))
 	mux.HandleFunc("GET /api/outputs", s.guard(s.outputInventory))
 	mux.HandleFunc("POST /api/outputs/check", s.guard(s.checkOutputs))
@@ -635,6 +645,10 @@ func (s *Server) diagnose(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, object{"cache_hit": hit, "mode": target.Mode, "target_host": u.Hostname(), "requires_headers": len(target.Headers) > 0, "note": "已获取下载地址；还需在实际播放器验证取流与拖动"})
 }
 func (s *Server) play(w http.ResponseWriter, r *http.Request) {
+	if s.s.restoreRestricted {
+		fail(w, 503, "恢复资料待核对，暂未开放播放入口")
+		return
+	}
 	id := r.PathValue("id")
 	started := time.Now()
 	record := PlaybackRecord{Media: cleanRecordText(id, 128), Name: "未知媒体", Action: "play", Status: 502, Info: s.mediaActivity(r.Context(), Media{})}

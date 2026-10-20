@@ -43,7 +43,23 @@ func main() {
 		log.Fatal(e)
 	}
 	defer dataLock.Close()
-	s, e := openStore(data)
+	restore, e := openRestoreManager(data)
+	if e != nil {
+		log.Fatal(e)
+	}
+	defer restore.Close()
+	if len(os.Args) > 1 && os.Args[1] == "restore-rollback" {
+		if e = runRestoreRollbackCLI(ctx, restore); e != nil {
+			log.Fatal(e)
+		}
+		log.Print("恢复回退完成；请正常启动服务并核对恢复资料")
+		return
+	}
+	recovery, e := restore.recoverStartup(ctx)
+	if e != nil {
+		log.Fatal("恢复保护未完成，拒绝启动: ", e)
+	}
+	s, e := openStoreForStartup(data, recovery)
 	if e != nil {
 		log.Fatal(e)
 	}
@@ -67,6 +83,7 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
+	server.restart = stop
 	addr := env("STRMLINK_LISTEN", ":8796")
 	httpServer := &http.Server{Addr: addr, Handler: server.handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	shutdownDone := make(chan struct{})

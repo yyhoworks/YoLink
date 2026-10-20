@@ -103,6 +103,7 @@ type Job struct {
 	RetriedBy        string        `json:"retried_by,omitempty"`
 }
 type Store struct {
+	startupRestore restoreRuntime
 	// Immutable for this Store lifetime. A restored database starts without any
 	// background workers; clearing the durable gate requires a controlled restart.
 	restoreRestricted bool
@@ -151,6 +152,10 @@ func keyFile(dir, name string, n int) ([]byte, error) {
 	return b, ce
 }
 func openStore(dir string) (result *Store, err error) {
+	return openStoreForStartup(dir, restoreRuntime{})
+}
+
+func openStoreForStartup(dir string, recovery restoreRuntime) (result *Store, err error) {
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return nil, e
 	}
@@ -187,7 +192,7 @@ func openStore(dir string) (result *Store, err error) {
 	if e != nil {
 		return nil, e
 	}
-	s := &Store{db: db, box: box, playKey: play, dir: dir}
+	s := &Store{db: db, box: box, playKey: play, dir: dir, startupRestore: recovery}
 	if e = migrateSchema(db); e != nil {
 		return nil, e
 	}
@@ -199,7 +204,7 @@ func openStore(dir string) (result *Store, err error) {
 	if e == nil && restoreReview != "0" && restoreReview != "1" {
 		return nil, errors.New("恢复保护状态无效，拒绝启动")
 	}
-	s.restoreRestricted = restoreReview == "1"
+	s.restoreRestricted = restoreReview == "1" || recovery.held()
 	if !s.restoreRestricted {
 		jobs, e := s.jobs(10000)
 		if e != nil {

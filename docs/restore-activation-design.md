@@ -1,8 +1,12 @@
 # Restore activation and rollback — implementation plan
 
-Status2026-10-21: proposed, awaiting independent Astra design review. The archive,
-validation and restricted startup primitives exist; this activation module and
-its HTTP/UI integration are not implemented yet.
+Status2026-10-21: revised design accepted by explicitly assigned Astra/high.
+Activation journal, file operations, rollback/review and HTTP integration are
+implemented in the development branch but NOT release-approved. Scoped core
+corrections were reviewed; expanded upload/GC/HTTP changes still have unresolved
+cleanup findings and missing final fault evidence. UI is not implemented.
+Phase-one reliability release is isolated in a separate checkout; no unfinished
+restore code is included. Resume this work without discarding its implementation.
 
 ## Interface and operational scope
 
