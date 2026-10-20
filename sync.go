@@ -52,6 +52,9 @@ func newEngine(ctx context.Context, s *Store, c Clouds, output string) (*Engine,
 	abs, _ := filepath.Abs(output)
 	en.outputMounts = []outputMount{{Path: filepath.ToSlash(filepath.Clean(abs)), Default: true, root: root}}
 	en.discoverOutputMounts()
+	if s.restoreRestricted {
+		return en, nil // No worker, scheduler, ingest or notification goroutine.
+	}
 	en.wg.Add(4)
 	go func() { defer en.wg.Done(); en.worker() }()
 	go func() { defer en.wg.Done(); en.scheduler() }()
@@ -120,6 +123,9 @@ func (e *Engine) enqueue(ruleID, folder, sourcePath string, dry bool, limit int,
 	return e.enqueueJob(ruleID, folder, sourcePath, dry, limit, trigger, retry)
 }
 func (e *Engine) enqueueJob(ruleID, folder, sourcePath string, dry bool, limit int, trigger, retryOf string) (Job, error) {
+	if e.s.restoreRestricted {
+		return Job{}, errors.New("恢复后尚未确认，请先核对恢复资料并重新启动")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	r, err := e.s.rule(ruleID)
@@ -265,6 +271,9 @@ func (e *Engine) saveProgress(j Job) error {
 	return e.s.saveJob(j)
 }
 func (e *Engine) run(id string) {
+	if e.s.restoreRestricted {
+		return
+	}
 	e.mu.Lock()
 	j, err := e.s.job(id)
 	if err != nil || j.Status != "queued" {

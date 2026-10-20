@@ -3,6 +3,7 @@
 /backups/
 /dist/
 /.impeccable/
+/.claude/
 /.env
 /.env.*
 !/.env.example

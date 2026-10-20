@@ -103,14 +103,17 @@ type Job struct {
 	RetriedBy        string        `json:"retried_by,omitempty"`
 }
 type Store struct {
-	channelsMu    sync.Mutex
-	activityMu    sync.Mutex
-	activityError string
-	dir           string
-	db            *sql.DB
-	box           cipher.AEAD
-	playKey       []byte
-	mu            sync.Mutex
+	// Immutable for this Store lifetime. A restored database starts without any
+	// background workers; clearing the durable gate requires a controlled restart.
+	restoreRestricted bool
+	channelsMu        sync.Mutex
+	activityMu        sync.Mutex
+	activityError     string
+	dir               string
+	db                *sql.DB
+	box               cipher.AEAD
+	playKey           []byte
+	mu                sync.Mutex
 }
 
 func randomID() string {
@@ -188,33 +191,48 @@ func openStore(dir string) (result *Store, err error) {
 	if e = migrateSchema(db); e != nil {
 		return nil, e
 	}
-	jobs, e := s.jobs(10000)
-	if e != nil {
-		return nil, e
+	var restoreReview string
+	e = db.QueryRow("SELECT value FROM settings WHERE id='restore_review_required'").Scan(&restoreReview)
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
+		return nil, errors.New("恢复保护状态无法读取，拒绝启动")
 	}
-	for _, j := range jobs {
-		if j.Status == "running" || j.Status == "queued" || (j.Status == "interrupted" && j.Resumable) {
-			if j.Resumable {
-				j.Status = "queued"
-				j.Resumes++
-				j.Message = "服务恢复，将从已保存断点继续"
-				j.Finished = 0
+	if e == nil && restoreReview != "0" && restoreReview != "1" {
+		return nil, errors.New("恢复保护状态无效，拒绝启动")
+	}
+	s.restoreRestricted = restoreReview == "1"
+	if !s.restoreRestricted {
+		jobs, e := s.jobs(10000)
+		if e != nil {
+			return nil, e
+		}
+		for _, j := range jobs {
+			if j.Status == "running" || j.Status == "queued" || (j.Status == "interrupted" && j.Resumable) {
+				if j.Resumable {
+					j.Status = "queued"
+					j.Resumes++
+					j.Message = "服务恢复，将从已保存断点继续"
+					j.Finished = 0
+					if e = s.saveJob(j); e != nil {
+						return nil, e
+					}
+					continue
+				}
+				j.Status = "interrupted"
+				j.Message = "服务已重启；可重新生成，已生成的文件会跳过"
+				j.Finished = time.Now().Unix()
 				if e = s.saveJob(j); e != nil {
 					return nil, e
 				}
-				continue
-			}
-			j.Status = "interrupted"
-			j.Message = "服务已重启；可重新生成，已生成的文件会跳过"
-			j.Finished = time.Now().Unix()
-			if e = s.saveJob(j); e != nil {
-				return nil, e
 			}
 		}
 	}
-	if e = s.initActivities(); e != nil {
-		db.Close()
-		return nil, e
+	// Legacy output backfill is deferred until restored data has been reviewed.
+	// Inspection/startup under hold must not materialize historical activities.
+	if !s.restoreRestricted {
+		if e = s.initActivities(); e != nil {
+			db.Close()
+			return nil, e
+		}
 	}
 	return s, nil
 }

@@ -82,6 +82,10 @@ func (w *eventResponse) Write(b []byte) (int, error) {
 }
 func (s *Server) eventEndpoint(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.s.restoreRestricted {
+			fail(w, 503, "恢复待核对期间不接受外部事件")
+			return
+		}
 		response := &eventResponse{ResponseWriter: w}
 		fn(response, r)
 		a, ok := r.Context().Value(eventAccessKey{}).(eventAccess)

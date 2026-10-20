@@ -22,6 +22,12 @@
 
 SQLite driver: `modernc.org/sqlite`, BSD-3-Clause, including SQLite (public domain) and the dependencies pinned in `go.mod`/`go.sum`. Dependency license texts are distributed in the source archive under `licenses/`.
 
+Encrypted backups use `filippo.io/age v1.3.2` (BSD-3-Clause), including its
+`filippo.io/hpke v0.4.0` and `golang.org/x/crypto v0.55.0` dependencies
+(BSD-3-Clause). Their upstream license notices are included under `licenses/`.
+No external encryption process or hosted backup service is used. Indirect
+`golang.org/x/sys v0.47.0` retains the Go BSD-3-Clause notice already distributed.
+
 The existing MoviePilot plugin and MediaWarp informed the architecture; their implementation files are not copied into this service.
 
 ## Fonts

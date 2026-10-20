@@ -314,6 +314,9 @@ func (e *Engine) deliveryWorker() {
 	}
 }
 func (e *Engine) processDeliveries() {
+	if e.s.restoreRestricted {
+		return
+	}
 	c, err := e.s.integrationConfig()
 	if err != nil {
 		return

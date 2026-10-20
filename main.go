@@ -38,6 +38,11 @@ func main() {
 	defer stop()
 	data := env("STRMLINK_DATA", "./data")
 	output := env("STRMLINK_OUTPUT", "./strm-test")
+	dataLock, e := acquireDataLock(data)
+	if e != nil {
+		log.Fatal(e)
+	}
+	defer dataLock.Close()
 	s, e := openStore(data)
 	if e != nil {
 		log.Fatal(e)

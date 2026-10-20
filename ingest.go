@@ -95,6 +95,9 @@ func (e *Engine) ingestWorker() {
 	}
 }
 func (e *Engine) processIngest() {
+	if e.s.restoreRestricted {
+		return
+	}
 	// Select one oldest event per idle rule before applying the batch limit.
 	// A busy rule's backlog must not hide work for unrelated rules.
 	rows, err := e.s.db.Query(`WITH candidates AS (
