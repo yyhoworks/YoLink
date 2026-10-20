@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -174,6 +175,23 @@ func TestActivityPreviewTaskDoesNotClaimFilesWritten(t *testing.T) {
 	}
 }
 
+func TestActivityCancelledContextReportsFailureWithoutWriting(t *testing.T) {
+	f := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.s.appendActivityContext(ctx, Activity{Kind: "direct", Outcome: "resolved"})
+	var count int
+	if err := f.s.db.QueryRow("SELECT count(*) FROM activity_events WHERE kind='direct'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("cancelled logging wrote a partial record", count, err)
+	}
+	f.s.activityMu.Lock()
+	failed := f.s.activityError != ""
+	f.s.activityMu.Unlock()
+	if !failed {
+		t.Fatal("deadline/cancellation failure was hidden")
+	}
+}
+
 func TestActivityRetentionAndLogFailureDoesNotBreak302(t *testing.T) {
 	f := setup(t)
 	raw, _ := json.Marshal(Activity{Kind: "direct", Name: "retention fixture", Outcome: "resolved"})
@@ -181,7 +199,11 @@ func TestActivityRetentionAndLogFailureDoesNotBreak302(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.s.appendActivity(Activity{Kind: "direct", Outcome: "resolved", Name: "new"})
+	// This verifies retention SQL, not the online 250ms best-effort budget.
+	// Race instrumentation on a NAS can consume that budget before pruning.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	f.s.appendActivityContext(ctx, Activity{Kind: "direct", Outcome: "resolved", Name: "new"})
 	var count int
 	f.s.db.QueryRow("SELECT COUNT(*) FROM activity_events WHERE kind='direct'").Scan(&count)
 	if count != 20000 {
