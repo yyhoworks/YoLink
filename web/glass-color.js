@@ -19,8 +19,13 @@
       const ratios=samples.map(bg=>contrast(color,bg)).sort((a,b)=>a-b);
       return{color,score:ratios[Math.floor((ratios.length-1)*.15)],css:'rgb('+color.join(', ')+')'};
     });
-    const best=scores.reduce((a,b)=>b.score>a.score?b:a);
-    const old=scores.find(v=>v.css===previous);
+    // Retain the status role when a role-specific color is readable. Neutral
+    // fallback is for insufficient contrast, not for maximizing an already-AA score.
+    const semantic=role==='good'||role==='danger';
+    const readableRole=semantic?scores.slice(0,2).filter(v=>v.score>=4.5):[];
+    const eligible=readableRole.length?readableRole:scores;
+    const best=eligible.reduce((a,b)=>b.score>a.score?b:a);
+    const old=eligible.find(v=>v.css===previous);
     const selected=old&&old.score>=4.5&&best.score<old.score+.6?old:best;
     return{...selected,limited:selected.score<4.5,light:luminance(selected.color)>.5};
   }

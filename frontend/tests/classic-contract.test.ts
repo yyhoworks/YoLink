@@ -30,14 +30,14 @@ describe('classic script migration contract', () => {
     expect(tree.body[0]).toMatchObject({ type: 'ExpressionStatement', directive: 'use strict' });
   });
 
-  it('keeps the original ordered defer script paths and no module tags', () => {
+  it('keeps the ordered classic scripts and loads reliability after its dependencies', () => {
     const scripts = [...read('../../web/index.html').matchAll(/<script\b([^>]*)>/g)];
     expect(scripts.map(([, attrs]) => /\bsrc="([^"]+)"/.exec(attrs)?.[1].split('?')[0])).toEqual([
       '/assets/lucide.min.js', '/generation.js', '/clouds.js',
       '/playback-ui.js', '/records.js', '/app.js',
       '/console.js', '/automation.js',
       '/workbench.js', '/connections.js',
-      '/glass-color.js', '/appearance.js', '/butter.js',
+      '/glass-color.js', '/appearance.js', '/butter.js', '/reliability.js',
     ]);
     for (const [, attrs] of scripts) {
       expect(attrs).toMatch(/\bdefer\b/);

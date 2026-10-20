@@ -17,7 +17,7 @@ const icons=()=>{if(window.lucide)lucide.createIcons()};
 const toast=message=>{$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4500)};
 async function api(path,body,options={}){return requestAPI(path,body,options)}
 async function action(button,fn){button.disabled=true;button.setAttribute('aria-busy','true');try{await fn()}catch(e){toast(e.message);$('global-error').textContent=e.message;$('global-error').hidden=false}finally{button.disabled=false;button.removeAttribute('aria-busy');if(!$('app').hidden)renderGeneration();if(typeof updateOutputSelection==='function')updateOutputSelection();if(!button.isConnected) return;icons()}}
-function showLogin(){recordsLeave();if(typeof closeSettingsDrawer==='function'&&$('settings-drawer')?.open)closeSettingsDrawer();$('login').hidden=false;$('app').hidden=true}
+function showLogin(){if(typeof reliabilityLeave==='function')reliabilityLeave();recordsLeave();if(typeof closeSettingsDrawer==='function'&&$('settings-drawer')?.open)closeSettingsDrawer();$('login').hidden=false;$('app').hidden=true}
 function showApp(){$('login').hidden=true;$('app').hidden=false}
 function nav(next,loadFiles=true,context={},options={}){
  if(next==='playback'){next='records';recordsKind='tools'}
@@ -26,6 +26,7 @@ function nav(next,loadFiles=true,context={},options={}){
  recordsLeave();if(next==='records'&&typeof recordsContext!=='undefined'){recordsContext={};if(typeof updateRecordContext==='function')updateRecordContext()}
  const generationTarget=next==='config'||next==='directories'?'config':'status';
  if(['config','directories','tasks'].includes(next))next='home';
+ if(typeof reliabilityLeave==='function'&&view!==next)reliabilityLeave(next);
  const previousView=view;view=next;$('global-error').hidden=true;
  document.querySelectorAll('.view').forEach(el=>el.hidden=el.id!=='view-'+next);
  document.querySelectorAll('.sidebar [data-nav]').forEach(el=>{const selected=el.dataset.nav===next,parent=el.dataset.nav==='more'&&['files','inventory','records','notifications','maintenance','settings'].includes(next);el.classList.toggle('active',selected||parent);if(selected)el.setAttribute('aria-current','page');else if(parent)el.setAttribute('aria-current','true');else el.removeAttribute('aria-current')});

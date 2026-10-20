@@ -148,6 +148,7 @@ async function action(button, fn) {
 }
 function showLogin() {
   var _a;
+  if (typeof reliabilityLeave === "function") reliabilityLeave();
   recordsLeave();
   if (typeof closeSettingsDrawer === "function" && ((_a = $("settings-drawer")) == null ? void 0 : _a.open)) closeSettingsDrawer();
   $("login").hidden = false;
@@ -172,6 +173,7 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   }
   const generationTarget = next === "config" || next === "directories" ? "config" : "status";
   if (["config", "directories", "tasks"].includes(next)) next = "home";
+  if (typeof reliabilityLeave === "function" && view !== next) reliabilityLeave(next);
   const previousView = view;
   view = next;
   $("global-error").hidden = true;

@@ -1,8 +1,8 @@
-# Account health and playback diagnostics — backend contract
+# Account health and playback diagnostics
 
-Intermediate implementation: backend endpoints and isolated regression tests are
-present. User-facing center/wizard UI, browser acceptance and production release
-are not yet complete. Do not treat this document as release approval.
+Intermediate implementation: backend endpoints, contextual UI and isolated
+regression tests are present. Live-provider/NAS validation and the whole-suite
+release gates are not yet complete. Do not treat this document as release approval.
 
 ## Account observations
 
@@ -88,6 +88,79 @@ not rerun network checks. Existing playback and generation routes are preserved.
   totals cannot be reported as a valid ranged media probe.
 
 No real provider or deployed-NAS behavior is claimed by these fixture tests.
+
+## Contextual UI
+
+`web/reliability.js` extends the existing account cards and generated-file list.
+It does not start background cloud probes or add navigation destinations.
+
+- Account details show separate directory/resolve/quota observations, timestamps,
+  failure counts and retry hints. Opening the panel only reads stored observations.
+  The explicit directory test contacts the provider.
+- Affected-job pagination preserves selections, stops on a changed account
+  revision, and shows why legacy/changed-rule jobs cannot recover. Users select
+  at most 50 jobs, inspect the named scopes and explicitly confirm submission.
+  Started and deferred results remain distinct. An uncertain network result is
+  not retried automatically and is not hidden by the following status refresh.
+- File diagnosis sends the selected registered output key and media identity.
+  Bounded probing is opt-in. Cancellation and navigation abort the diagnostic
+  request; stale callbacks cannot replace the next file/account's detail.
+  A failed local STRM remains visibly failed even when the cloud probe succeeds.
+- Export re-fetches the authenticated sanitized report. Expiry is actionable;
+  a superseded export cannot download under the next report's identity.
+- Recovery writes are not automatically cancelled/retried on navigation because
+  the server may have already accepted the work. Navigating away hides the old
+  panel and completion communicates a short result rather than populating a new
+  account's panel. Closing restores focus to the current equivalent trigger.
+
+The new CSS inherits the incumbent semantic tokens, controls and materials;
+no brand, global theme, runtime dependency or new modal was introduced.
+
+## Reproducible browser verification
+
+From `frontend/`: `npm run check`, then `npx playwright test`.
+The default browser suite serves synthetic read-only fixtures; tests explicitly
+intercept writes. The reliability cases cover desktop 1440px and phone 390px,
+pagination, eligibility, explicit recovery, mixed outcomes, failed writes,
+revision changes, cancellation, close/reopen, export races and expired exports,
+navigation/logout, six original palettes, and both glass text modes.
+
+For real HTTP/auth/SQLite/queue/file integration, install frontend dependencies
+and Edge, then run at the repository root:
+
+```powershell
+$env:YOLINK_BROWSER_E2E='1'
+go test -run '^TestReliabilityBrowserEndToEnd$' -count=1 -v .
+```
+
+This opt-in test creates all data/output under Go temporary directories and binds
+an ephemeral loopback HTTP server. Only the cloud and media transport are fake.
+It drives normal login, directory test, recovery, diagnosis and download, then
+checks persisted recovery/report records and preservation of edited STRM bytes.
+It does not use NAS mounts, production credentials or external network services.
+The test is skipped in ordinary `go test` runs unless explicitly enabled.
+
+Local evidence from this UI increment (2026-10-20): Go full suite PASS 38.173s,
+vet PASS; frontend type/lint/generated checks and 88 unit tests PASS; full browser
+suite 54/54 PASS, including 17 reliability cases; opt-in real-handler test PASS
+(latest 9.311s including browser startup and capture). Screenshots are local
+artifacts under `.impeccable/review/reliability-browser/` and
+`.impeccable/review/reliability-live/`, not production screenshots.
+Glass captures use top/task viewport pairs: Chromium full-page screenshots can
+truncate a fixed wallpaper below the initial viewport and are not valid evidence
+of that region's real rendering.
+
+Independent code review verified the async/focus corrections with no remaining
+correctness blocker identified in this increment. Independent UI review inspected
+the desktop/phone/palette/glass/real-handler captures and returned scoped `ship`.
+It identified two inherited glass issues, both corrected and re-reviewed as
+resolved: readable semantic colors now take priority over neutral fallback, and
+the account browse action is classified as a primary control. Regression checks
+assert distinct status colors and >=4.5:1 browse contrast in both tested glass
+foreground modes. This does not certify arbitrary wallpapers or all glass states.
+Documentation consistency review confirmed no durable visual-system change;
+existing outer PRODUCT/DESIGN history was preserved, not copied into this checkout.
+These reviews are increment-scoped, not either of the two final-suite signoffs.
 
 Current backend increment passed `go test -count=1 ./...` (43.011s), `go vet
 ./...`, and `git diff --check`. Independent interim review identified and verified

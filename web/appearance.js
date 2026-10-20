@@ -80,7 +80,7 @@
       if(el.closest('.wallpaper-preview,.style-sample,.palette-swatches,.sidebar'))return;
       const text=Array.from(el.childNodes).some(n=>n.nodeType===3&&n.textContent.trim());
       if(!text&&!el.matches('button,input,select,textarea,svg'))return;
-      const primary=el.closest('button.primary');
+      const primary=el.closest('button.primary,button[data-cloud-browse]');
       const role=primary?'primary':el.closest('.error,.danger')?'danger':el.closest('.good')?'good':'body';
       el.setAttribute('data-glass-adapted',light||primary?'light':'dark');
       el.setAttribute('data-glass-role',role);

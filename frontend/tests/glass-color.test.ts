@@ -34,6 +34,11 @@ describe('local glass foreground contrast',()=>{
     expect(next.css).toBe(initial.css);
   });
   it.each(['good','danger'])('keeps %s labels readable on light and dark backgrounds',role=>{
-    for(const background of [[230,238,244],[20,40,48]])expect(color.choose([background],role).score).toBeGreaterThanOrEqual(4.5);
+    for(const background of [[230,238,244],[20,40,48]]){
+      const neutral=color.choose([background]);
+      const status=color.choose([background],role,neutral.css);
+      expect(status.score).toBeGreaterThanOrEqual(4.5);
+      expect(status.css).not.toBe(neutral.css);
+    }
   });
 });

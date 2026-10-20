@@ -1,0 +1,36 @@
+import { test,expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+
+test('real Go health, recovery, diagnostic and sanitized export',async({page},testInfo)=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.setViewportSize({width:1440,height:1000});
+ await page.goto('/#accounts');
+ await page.locator('#login-form').getByLabel('管理员密码',{exact:true}).fill('fixture-admin-password');
+ await page.getByRole('button',{name:'登录',exact:true}).click();
+ await page.getByRole('button',{name:'健康与恢复',exact:true}).click();
+ await expect(page.locator('#health-operations')).toContainText('尚未检查');
+ await expect(page.locator('#health-review')).toBeDisabled();
+ await page.locator('#health-test').click();
+ await expect(page.locator('#health-readiness')).toContainText('账号当前满足恢复条件');
+ await page.locator('[data-health-job="synthetic-recovery"]').check();
+ await page.locator('#health-review').click();await page.locator('#health-confirm').click();
+ await expect(page.locator('#health-recovery-result')).toContainText('已加入恢复队列 1 项');
+ await page.goto('/#inventory');
+ await page.locator('[data-media-diagnose="'+process.env.YOLINK_TEST_MEDIA+'"]').click();
+ await page.locator('#diagnostic-probe').check();await page.locator('#diagnostic-run').click();
+ await expect(page.locator('#diagnostic-steps>li')).toHaveCount(5);
+ await expect(page.locator('#diagnostic-summary')).toContainText('发现需要处理的问题');
+ await expect(page.locator('#diagnostic-steps')).toContainText('本地内容已变化；没有覆盖文件');
+ const downloadPromise=page.waitForEvent('download');await page.locator('#diagnostic-export').click();
+ const download=await downloadPromise;const path=await download.path();
+ expect(path).toBeTruthy();const raw=await readFile(path!,'utf8');
+ const exported=JSON.parse(raw);
+ expect(exported.steps).toHaveLength(5);expect(exported.steps[1].status).toBe('failed');
+ expect(exported.bytes).toBe(1024);expect(exported.readable).toBe(true);
+ expect(raw).not.toMatch(/fixture-secret|fixture-admin-password|cdn\.example|user-edit\.example|电影|test\/media/);
+ await expect(page.locator('#toast')).toBeHidden();await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:testInfo.outputPath('desktop.png'),fullPage:true});
+ await page.setViewportSize({width:390,height:844});
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:testInfo.outputPath('mobile.png'),fullPage:true});
+ expect(errors).toEqual([]);
+});
