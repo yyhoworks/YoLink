@@ -20,7 +20,7 @@ try {
     # No production data or output is mounted. A bounded, dedicated directory
     # holds source, compiler cache and evidence; compiler container is disposable.
     $script = 'apk add --no-cache gcc musl-dev; mkdir /work/src; tar -xf /work/source.tar -C /work/src; cd /work/src; export GOCACHE=/work/cache GOPATH=/work/gopath CGO_ENABLED=1 GOMAXPROCS=2; go version; gcc --version; go test -race -count=1 -timeout=15m ./...; go vet ./...; go test -run "^$" -bench "^BenchmarkCheckpointProgress$" -benchtime=20x -count=2'
-    $command = "/usr/local/bin/docker run --rm --memory=2g --cpus=2 --pids-limit=512 --mount type=bind,src=$remote,dst=/work --entrypoint /bin/sh golang:1.27-alpine -ec '$script'"
+    $command = "/usr/local/bin/docker run --rm --memory=2g --cpu-shares=256 --pids-limit=512 --mount type=bind,src=$remote,dst=/work --entrypoint /bin/sh golang:1.27-alpine -ec '$script'"
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $output = @(& ssh @sshArgs $command 2>&1 | ForEach-Object { "$_" })
     $resultCode = $LASTEXITCODE
