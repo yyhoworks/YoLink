@@ -65,6 +65,10 @@ func restoreDecode(raw []byte, target any) error {
 }
 
 func (m *restoreManager) readEnvelope(name string, target any) (string, error) {
+	return m.readEnvelopeLimit(name, target, restoreJournalMax)
+}
+
+func (m *restoreManager) readEnvelopeLimit(name string, target any, limit int64) (string, error) {
 	if err := restoreCheckPath(m.root, name, false); err != nil {
 		return "", err
 	}
@@ -74,11 +78,11 @@ func (m *restoreManager) readEnvelope(name string, target any) (string, error) {
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || info.Size() > restoreJournalMax {
+	if err != nil || info.Size() > limit {
 		return "", errors.New("恢复日志过大或无法读取")
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, restoreJournalMax+1))
-	if err != nil || int64(len(raw)) > restoreJournalMax {
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(raw)) > limit {
 		return "", errors.New("恢复日志读取中断")
 	}
 	var envelope restoreEnvelope
@@ -432,6 +436,14 @@ func unionRestoreInventory(a, b restoreInventory) restoreInventory {
 }
 
 func (m *restoreManager) recoverStartup(ctx context.Context) (restoreRuntime, error) {
+	// main holds the exclusive data lock here, before opening SQLite/auth or
+	// workers. Also collect interrupted uploads when there is NO active journal.
+	if err := m.temporaryFiles().cleanupExports(); err != nil {
+		return restoreRuntime{}, err
+	}
+	if err := m.cleanupUnarmed(); err != nil {
+		return restoreRuntime{}, err
+	}
 	p, err := m.loadJournal()
 	if err != nil || p == nil {
 		return restoreRuntime{}, err
@@ -640,7 +652,7 @@ func (m *restoreManager) armCandidate(ctx context.Context, id, revision string, 
 }
 
 func (m *restoreManager) cancelPending(id string) error {
-	p, err := m.loadJournal()
+	p, upload, _, err := m.candidateProtection()
 	if err != nil {
 		return err
 	}
@@ -654,6 +666,19 @@ func (m *restoreManager) cancelPending(id string) error {
 		if err = m.releaseReserve(p); err != nil {
 			return err
 		}
+	}
+	if err = m.ensureCandidateOwnership(id, p); err != nil {
+		return err
+	}
+	// Remove the upload protection BEFORE cancellation publication. Until the
+	// active journal is reverted it still protects the candidate after any crash.
+	if upload != nil && upload.ID == id {
+		if err = m.forgetUpload(id); err != nil {
+			return err
+		}
+	}
+	if err = m.step("cancel.upload_removed"); err != nil {
+		return err
 	}
 	// Persist cleanup eligibility before reverting the active pointer. If the
 	// process dies after cancellation publication, history-aware orphan cleanup

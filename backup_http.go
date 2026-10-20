@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 	"time"
 )
 
@@ -59,34 +60,72 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 	defer s.backupMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	snapshot, err := s.backupSnapshot(ctx, s.s.dir, in.AdminPassword)
-	if snapshot != "" {
-		defer func() {
-			if e := os.RemoveAll(snapshot); e != nil {
-				s.s.notify("备份临时资料待清理", "备份快照清理失败，请检查数据目录的 .backup-snapshot-* 私有目录。", "error", "backup-cleanup")
-			}
-		}()
+	m, err := openRestoreManager(s.s.dir)
+	if err != nil {
+		fail(w, 500, "备份数据目录无法打开")
+		return
+	}
+	defer m.Close()
+	o := temporaryFiles{root: m.root, fault: s.backupFault}
+	if err = o.cleanupExports(); err != nil {
+		fail(w, 500, "上次备份临时资料清理未完成，请检查磁盘后重试")
+		return
+	}
+	id := randomID()
+	workspace, err := o.create("export", id)
+	if err != nil {
+		fail(w, 500, "无法安全创建备份工作区，请检查磁盘空间")
+		return
+	}
+	// The archive is closed before this deferred cleanup, including on Windows.
+	// Cleanup is independent of r.Context(), including client cancellation.
+	defer func() {
+		if e := o.cleanup("export", id); e != nil {
+			log.Print("备份临时工作区清理失败，已保留所有权记录以便启动时重试")
+			s.s.notify("备份临时资料待清理", "私有备份工作区清理失败，请检查磁盘后重试；服务重启前会再次清理。", "error", "backup-cleanup")
+		}
+	}()
+	snapshot, err := s.backupSnapshot(ctx, filepath.Join(s.s.dir, filepath.FromSlash(workspace)), in.AdminPassword)
+	if err == nil {
+		err = o.step("export.snapshot.created")
 	}
 	if err != nil {
 		fail(w, 400, err.Error())
 		return
 	}
-	archive, err := os.CreateTemp(s.s.dir, ".backup-encrypted-*.age")
+	archive, err := m.root.OpenFile(workspace+"/backup.age", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		fail(w, 500, "无法创建加密备份，请检查剩余磁盘空间")
 		return
 	}
-	defer func() {
-		archive.Close()
-		if e := os.Remove(archive.Name()); e != nil && !os.IsNotExist(e) {
-			s.s.notify("加密备份临时文件待清理", "请检查数据目录的 .backup-encrypted-* 文件。", "error", "backup-cleanup")
-		}
-	}()
+	defer archive.Close()
 	if _, err = writeBackupArchive(ctx, archive, snapshot, in.BackupPassword, currentSchemaVersion); err == nil {
 		err = archive.Sync()
 	}
 	if err != nil {
 		fail(w, 500, "加密备份生成失败，请检查磁盘空间后重试")
+		return
+	}
+	if err = o.step("export.encrypted"); err != nil {
+		fail(w, 500, "加密备份生成中断")
+		return
+	}
+	// No reader of snapshot remains after writeBackupArchive returns. Delete and
+	// sync plaintext BEFORE publishing HTTP success headers, not in a defer.
+	relative, err := filepath.Rel(s.s.dir, snapshot)
+	if err != nil || !filepath.IsLocal(relative) {
+		fail(w, 500, "备份快照路径无效")
+		return
+	}
+	if err = o.removeTree(filepath.ToSlash(relative)); err == nil {
+		err = o.syncDir(workspace)
+	}
+	if err != nil {
+		fail(w, 500, "备份明文快照清理未完成，未发送备份文件")
+		return
+	}
+	if err = ctx.Err(); err != nil {
+		fail(w, 408, "备份请求已取消")
 		return
 	}
 	info, err := archive.Stat()
@@ -102,7 +141,9 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="yolink-backup-%s.age"`, time.Now().UTC().Format("20060102T150405Z")))
 	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.Copy(w, backupContextReader{ctx, archive})
+	if _, err = io.Copy(w, backupContextReader{ctx, archive}); err != nil {
+		log.Print("加密备份传输未完成；临时工作区将独立清理")
+	}
 }
 
 func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +204,17 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err = multipart.NextPart(); err != io.EOF {
-		// Session is fresh and unarmed; same cleanup ownership as preparation.
-		_ = m.root.RemoveAll(path.Join(restoreControlName, candidate.ID))
+		if cleanupErr := m.cleanupCandidate(candidate.ID); cleanupErr != nil {
+			fail(w, 500, "恢复请求包含多余内容，候选清理未完成，已保留所有权以便重试")
+			return
+		}
 		fail(w, 400, "恢复请求包含多余内容，请重新上传")
 		return
 	}
 	if err = m.storeUpload(candidate); err != nil {
+		// Rename may have succeeded even when its following sync returned an
+		// error. Re-read every protection source before deciding on cleanup.
+		_ = m.cleanupCandidate(candidate.ID)
 		fail(w, 500, "恢复候选状态未保存，暂未启用")
 		return
 	}

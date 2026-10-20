@@ -30,7 +30,7 @@ func (m *restoreManager) prepareCandidate(ctx context.Context, source io.Reader,
 	out.ID = randomID()
 	out.Created = time.Now().Unix()
 	base := path.Join(restoreControlName, out.ID)
-	if err = m.mkdir(base); err != nil {
+	if _, err = m.temporaryFiles().create("candidate", out.ID); err != nil {
 		return out, err
 	}
 	// This session ID was freshly allocated and has never been armed. Transfer
@@ -39,10 +39,8 @@ func (m *restoreManager) prepareCandidate(ctx context.Context, source io.Reader,
 		if err == nil {
 			return
 		}
-		if cleanupErr := m.root.RemoveAll(base); cleanupErr != nil {
-			err = errors.Join(err, errors.New("未启用恢复候选清理失败，需管理员清理遗留资料"))
-		} else if syncErr := m.syncDir(restoreControlName); syncErr != nil {
-			err = errors.Join(err, errors.New("未启用恢复候选清理尚未完整提交"))
+		if cleanupErr := m.cleanupCandidate(out.ID); cleanupErr != nil {
+			err = errors.Join(err, errors.New("未启用恢复候选清理失败，已保留所有权记录以便重试"), cleanupErr)
 		}
 	}()
 	if err = m.writeEnvelope(path.Join(base, "unarmed.json"), restoreUpload{ID: out.ID}, "unarmed"); err != nil {

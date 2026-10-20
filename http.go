@@ -41,6 +41,7 @@ type Server struct {
 	probeClient     *http.Client
 	maintenanceMu   sync.Mutex
 	backupMu        sync.Mutex
+	backupFault     func(string) error // durability/process-interruption test seam
 	restart         func()
 }
 

@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"path"
+	"strings"
 )
 
 type restoreUpload struct {
@@ -21,10 +21,10 @@ func (m *restoreManager) uploadedCandidate() (*restoreUpload, error) {
 		return nil, err
 	}
 	var upload restoreUpload
-	if _, err := m.readEnvelope(name, &upload); err != nil {
+	if _, err := m.readEnvelopeLimit(name, &upload, temporaryClaimMax); err != nil {
 		return nil, err
 	}
-	if !restoreIDValid(upload.ID) || len(upload.Revision) != 64 {
+	if !restoreIDValid(upload.ID) || len(upload.Revision) != 64 || strings.Trim(upload.Revision, "0123456789abcdef") != "" {
 		return nil, errors.New("上传候选状态无效")
 	}
 	return &upload, nil
@@ -56,7 +56,7 @@ func (m *restoreManager) uploadSlotAvailable() error {
 	if err != nil {
 		return err
 	}
-	if err = m.cleanupUnarmed(p, upload); err != nil {
+	if err = m.cleanupUnarmed(); err != nil {
 		return err
 	}
 	if p != nil && !restoreTerminal(p.Runtime.State) {
@@ -72,26 +72,24 @@ func (m *restoreManager) uploadSlotAvailable() error {
 }
 
 func (m *restoreManager) discardUploaded(id string) error {
-	upload, err := m.uploadedCandidate()
+	_, upload, protected, err := m.candidateProtection()
 	if err != nil {
 		return err
 	}
 	if upload == nil || upload.ID != id {
 		return errors.New("上传候选不存在")
 	}
-	p, err := m.loadJournal()
-	if err != nil {
-		return err
-	}
-	if p != nil && p.Runtime.ID == id {
+	// The whole prior chain wins over an inconsistent/stale upload pointer.
+	if protected[id] {
 		return errors.New("恢复候选已启用，请取消等待中的恢复操作")
 	}
-	// Remove only the uploaded, locally generated session, never historical
-	// baseline/control root. Failed removal keeps the pointer for retry/reporting.
-	if err = m.root.RemoveAll(path.Join(restoreControlName, id)); err != nil {
-		return errors.New("上传候选清理失败，请保留资料后重试")
+	if err = m.ensureCandidateOwnership(id, nil); err != nil {
+		return err
 	}
-	return m.forgetUpload(id)
+	if err = m.forgetUpload(id); err != nil {
+		return err
+	}
+	return m.cleanupCandidate(id)
 }
 
 func (m *restoreManager) storeUpload(candidate restoreCandidate) error {
@@ -102,7 +100,10 @@ func (m *restoreManager) storeUpload(candidate restoreCandidate) error {
 }
 
 func (m *restoreManager) cancelRestore(ctx context.Context, id string) error {
-	p, err := m.loadJournal()
+	if !restoreIDValid(id) {
+		return errors.New("恢复候选身份无效")
+	}
+	p, upload, history, err := m.candidateProtection()
 	if err != nil {
 		return err
 	}
@@ -113,58 +114,108 @@ func (m *restoreManager) cancelRestore(ctx context.Context, id string) error {
 		if err = m.step("cancel.state_published"); err != nil {
 			return err
 		}
-		if err = m.root.RemoveAll(path.Join(restoreControlName, id)); err != nil {
-			return errors.New("已取消的恢复候选清理失败")
-		}
-		if err = m.forgetUpload(id); err != nil {
-			return err
-		}
-		return m.syncDir(restoreControlName)
+		return m.cleanupCandidate(id)
 	}
-	upload, e := m.uploadedCandidate()
-	if e != nil {
-		return e
+	if history[id] {
+		return errors.New("恢复会话已使用，不能清理")
 	}
 	if upload == nil {
-		protected, e := m.protectedHistory(p)
-		if e != nil {
-			return e
-		}
-		if protected[id] || !restoreIDValid(id) {
-			return errors.New("恢复会话已使用，不能清理")
-		}
-		var marker restoreUpload
-		if _, e = m.readEnvelope(path.Join(restoreControlName, id, "unarmed.json"), &marker); e != nil || marker.ID != id {
-			return errors.New("可取消的恢复候选不存在")
-		}
-		if e = m.root.RemoveAll(path.Join(restoreControlName, id)); e != nil {
-			return e
-		}
-		return m.syncDir(restoreControlName)
+		return m.cleanupCandidate(id)
 	}
 	return m.discardUploaded(id)
 }
 
-func (m *restoreManager) cleanupUnarmed(p *restoreJournal, upload *restoreUpload) error {
+func (m *restoreManager) candidateProtection() (*restoreJournal, *restoreUpload, map[string]bool, error) {
+	p, err := m.loadJournal()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	protected, err := m.protectedHistory(p)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	upload, err := m.uploadedCandidate()
+	return p, upload, protected, err
+}
+
+// Only a validated internal marker (legacy) or the exact pending journal may
+// authorize migrating an old candidate to external ownership. Fresh candidates
+// use temporaryFiles.create and can never adopt a pre-existing directory.
+func (m *restoreManager) ensureCandidateOwnership(id string, pending *restoreJournal) error {
+	o := m.temporaryFiles()
+	_, claim, err := temporaryNames("candidate", id)
+	if err != nil {
+		return err
+	}
+	if _, err = m.root.Lstat(claim); err == nil {
+		if err = o.readClaim("candidate", id); err != nil {
+			return err
+		}
+		return o.syncDir(restoreControlName)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if pending == nil || pending.Runtime.ID != id || (pending.Runtime.State != "pending" && pending.Runtime.State != "prepared") {
+		var marker restoreUpload
+		if _, err = m.readEnvelopeLimit(path.Join(restoreControlName, id, "unarmed.json"), &marker, temporaryClaimMax); err != nil {
+			return err
+		}
+		if marker.ID != id || marker.Revision != "" {
+			return errors.New("未启用候选身份不一致")
+		}
+	}
+	return o.publish("candidate", id)
+}
+
+func (m *restoreManager) cleanupCandidate(id string) error {
+	_, upload, protected, err := m.candidateProtection()
+	if err != nil {
+		return err
+	}
+	if protected[id] || upload != nil && upload.ID == id {
+		return errors.New("恢复候选仍受保护，已保留")
+	}
+	if err = m.ensureCandidateOwnership(id, nil); err != nil {
+		return err
+	}
+	return m.temporaryFiles().cleanup("candidate", id)
+}
+
+func (m *restoreManager) cleanupUnarmed() error {
+	_, upload, protected, err := m.candidateProtection()
 	if err != nil {
 		return err
 	}
 	if upload != nil {
 		protected[upload.ID] = true
 	}
-	entries, err := fs.ReadDir(m.root.FS(), restoreControlName)
+	if _, err = m.root.Lstat(restoreControlName); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	o := m.temporaryFiles()
+	entries, err := o.entries(restoreControlName, temporaryControlLimit)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if len(entries) > 1000 {
-		return errors.New("恢复控制资料过多，请检查磁盘空间")
-	}
+	ids := map[string]bool{}
 	for _, entry := range entries {
 		id := entry.Name()
+		if strings.HasPrefix(id, "unarmed-") && strings.HasSuffix(id, ".json") {
+			id = strings.TrimSuffix(strings.TrimPrefix(id, "unarmed-"), ".json")
+			if !restoreIDValid(id) {
+				return errors.New("未启用候选所有权名称无效")
+			}
+			if err = o.readClaim("candidate", id); err != nil {
+				return err
+			}
+			ids[id] = true
+			continue
+		}
 		if !restoreIDValid(id) || protected[id] {
 			continue
 		}
@@ -174,21 +225,20 @@ func (m *restoreManager) cleanupUnarmed(p *restoreJournal, upload *restoreUpload
 		} else if err != nil {
 			return err
 		}
-		var unarmed restoreUpload
-		if _, err = m.readEnvelope(marker, &unarmed); err != nil {
+		if err = m.ensureCandidateOwnership(id, nil); err != nil {
 			return err
 		}
-		if unarmed.ID != id {
-			return errors.New("未启用候选身份不一致")
+		ids[id] = true
+	}
+	for id := range ids {
+		if protected[id] {
+			continue
 		}
-		if err = m.root.RemoveAll(path.Join(restoreControlName, id)); err != nil {
-			return errors.New("中断的恢复上传清理失败")
+		if err = m.cleanupCandidate(id); err != nil {
+			return err
 		}
 	}
-	if _, err = m.root.Lstat(restoreControlName); os.IsNotExist(err) {
-		return nil
-	}
-	return m.syncDir(restoreControlName)
+	return nil
 }
 
 func (m *restoreManager) protectedHistory(p *restoreJournal) (map[string]bool, error) {
