@@ -12,6 +12,9 @@ COPY web ./web
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /yolink .
 
 FROM alpine:3.22
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.source="https://github.com/yyhoworks/YoLink" \
+      org.opencontainers.image.revision=$SOURCE_REVISION
 RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data /strm
 COPY --from=build /yolink /usr/local/bin/yolink
 COPY LICENSE THIRD_PARTY.md /licenses/

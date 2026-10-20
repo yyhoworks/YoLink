@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1
 # Fast trial build: select the binary for the Docker target architecture.
 FROM alpine:3.22
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.source="https://github.com/yyhoworks/YoLink" \
+      org.opencontainers.image.revision=$SOURCE_REVISION
 ARG TARGETARCH
 RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data /strm
 COPY dist/yolink-linux-${TARGETARCH} /usr/local/bin/yolink
