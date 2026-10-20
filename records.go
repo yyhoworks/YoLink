@@ -144,13 +144,19 @@ func (s *Store) initActivities() error {
 }
 
 func (s *Store) appendActivity(v Activity) {
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	s.appendActivityContext(ctx, v)
+}
+
+// Keep the online logging budget separate from storage-policy tests. A slow
+// instrumented database must not make playback wait for unbounded log pruning.
+func (s *Store) appendActivityContext(ctx context.Context, v Activity) {
 	if v.Time == 0 {
 		v.Time = time.Now().UnixMilli()
 	}
 	v.Error = cleanRecordText(v.Error, 300)
 	v.Note = cleanRecordText(v.Note, 500)
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
 	raw, err := json.Marshal(v)
 	if err == nil {
 		var tx *sql.Tx

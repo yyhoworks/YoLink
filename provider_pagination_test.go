@@ -61,6 +61,9 @@ func TestProvidersRejectIncompleteDirectoryListings(t *testing.T) {
 						result = object{"items": list, "next_marker": marker}
 					case "139":
 						result = object{"success": true, "data": object{"items": list, "nextPageCursor": marker}}
+						if scenario == "missing_paging" {
+							delete(obj(result["data"]), "nextPageCursor")
+						}
 					case "139old":
 						result = object{"success": true, "data": object{"getDiskResult": object{"catalogList": []any{}, "contentList": list, "nodeCount": total}}}
 					case "quark":
@@ -76,5 +79,39 @@ func TestProvidersRejectIncompleteDirectoryListings(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func Test139ExplicitNullCursorCompletesOnlyValidTerminalPage(t *testing.T) {
+	for _, count := range []int{0, 18, 100, 118, 200} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			f := setup(t)
+			a := Account{ID: "pagination", Provider: "139", Root: "root", Secrets: map[string]string{
+				"authorization": base64.StdEncoding.EncodeToString([]byte("fixture:123:token")), "api_host": "https://fixture.139.com",
+			}}
+			if err := f.s.saveAccount(a); err != nil {
+				t.Fatal(err)
+			}
+			p := newProviders(f.s)
+			offset, calls := 0, 0
+			p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				rows := []any{}
+				end := min(offset+100, count)
+				for i := offset; i < end; i++ {
+					rows = append(rows, object{"fileId": fmt.Sprint(i), "name": fmt.Sprint(i) + ".mkv", "type": "file"})
+				}
+				var next any
+				if end < count {
+					next = "page2"
+				}
+				offset = end
+				return response115(r, object{"success": true, "data": object{"items": rows, "nextPageCursor": next}}), nil
+			})
+			entries, err := p.List(context.Background(), a.ID, a.Root)
+			if err != nil || len(entries) != count || calls != max(1, (count+99)/100) {
+				t.Fatal("explicit terminal null rejected or extra page requested", len(entries), calls, err)
+			}
+		})
 	}
 }

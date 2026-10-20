@@ -577,6 +577,14 @@ func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Ent
 			}
 			cursorBased := a.Provider == "139" || a.Provider == "ali"
 			if cursorBased {
+				// 139 explicitly returns JSON null on the final page (including
+				// nonempty pages). Missing fields and non-string values still fail;
+				// do not infer completion from an absent cursor or a short list.
+				if a.Provider == "139" && cursorValue == nil {
+					if _, present := data["nextPageCursor"]; present {
+						cursorValue = ""
+					}
+				}
 				next, ok = cursorValue.(string)
 				if !ok {
 					return cloudProtocolError("网盘目录响应缺少有效分页游标")
