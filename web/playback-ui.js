@@ -5,9 +5,15 @@ function renderPlaybackTools(){
  $('playback-cache-stats').innerHTML=`<span><strong>${stats.entries||0}</strong>有效直链</span><span><strong>${stats.hits||0}</strong>复用 / 合并</span><span><strong>${stats.misses||0}</strong>重新解析</span>`;
  const records=playback.history||[],key=JSON.stringify(records);
  if(key!==toolHistoryKey){toolHistoryKey=key;$('playback-history').innerHTML=records.length?records.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${r.action==='check'?'取流自检':r.action==='head'?'HEAD 预检':'播放入口请求'} · ${r.mode==='302'?'302 直连':r.mode==='proxy'?'服务器中转':'待确认'}</small></td><td><span class="${r.error?'error':r.action==='check'&&r.readable?'good':'muted'}">${r.error?esc(r.error):r.action==='check'?(r.readable?'可读取'+(r.range?' · Range 正常':' · Range 未确认'):'未取得媒体'):r.status===302?'已返回 302':r.action==='head'&&r.status===200?'媒体信息可读取':'已解析中转地址'}</span></td><td>${r.cache?'复用':'新解析'}</td><td>${r.millis} ms</td><td>${date(r.time)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">播放或运行取流自检后，这里会记录结果。</td></tr>'}
+}
+function renderIngestHistory(){
  const events=state.ingest||[],eventKey=JSON.stringify(events);
  if(eventKey!==ingestHistoryKey){ingestHistoryKey=eventKey;$('ingest-section').hidden=!events.length;$('ingest-summary').textContent='最近入库触发 · '+events.length+' 条';$('ingest-list').innerHTML=events.map(e=>`<div class="ingest-row"><div><strong>${esc(ruleBy(e.rule)?.name||'已移除规则')}</strong><p>${esc(e.path)}</p><small>${e.error?esc(e.error):e.status==='pending'?'等待规则空闲后处理':e.status==='submitted'?'已提交生成任务':esc(statusNames[e.status]||e.status)}</small></div>${e.status==='failed'&&!e.job?`<button data-ingest-retry="${esc(e.id)}">重试目录读取</button>`:`<span class="hint">${date(e.created)}</span>`}</div>`).join('')}
+}
+function renderLegacyEventOptions(){
  genSetOptions($('ingest-rule'),state.rules.filter(r=>!accountBy(r.account)?.disabled).map(r=>({id:r.id,label:r.name})), $('ingest-rule').value);
+}
+function renderMaintenanceTools(){
  if(!restoredPlans){restoredPlans=true;for(const mode of ['links','migration'])restoreToolPlan(mode)}
 }
 function showProbeResult(r){

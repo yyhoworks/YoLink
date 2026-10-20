@@ -34,18 +34,17 @@ function eventClientSummary(){
  const n=clientsData.items.filter(c=>c.enabled).length,last=clientsData.calls[0];
  return [n+' 个应用'+(clientsData.legacy.enabled?' · 兼容接入可用':''),n||clientsData.legacy.enabled?'good':'muted',last?'最近调用：'+last.name+' · HTTP '+last.status:'尚无调用记录；不会自行监控外部程序','管理'];
 }
-async function loadNotificationChannels(){
- try{channelsData=await api('/api/notification-channels');$('channel-list-error').hidden=true;renderNotificationChannels();renderSettingsSummary()}
- catch(e){$('channel-list-error').textContent=e.message+'。可关闭后重新打开或刷新状态。';$('channel-list-error').hidden=false;throw e}
+async function loadNotificationChannels(options={}){
+ try{const data=await api('/api/notification-channels',undefined,{signal:options.signal});if(options.signal?.aborted)return;channelsData=data;$('channel-list-error').hidden=true;renderNotificationChannels();renderSettingsSummary()}
+ catch(e){if(options.signal?.aborted||e.name==='AbortError')return;$('channel-list-error').textContent=e.message+'。可关闭后重新打开或刷新状态。';$('channel-list-error').hidden=false;throw e}
 }
-async function loadEventClients(){
- try{clientsData=await api('/api/event-clients');$('client-list-error').hidden=true;renderEventClients();renderSettingsSummary()}
- catch(e){$('client-list-error').textContent=e.message+'。可关闭后重新打开或刷新状态。';$('client-list-error').hidden=false;throw e}
+async function loadEventClients(options={}){
+ try{const data=await api('/api/event-clients',undefined,{signal:options.signal});if(options.signal?.aborted)return;clientsData=data;$('client-list-error').hidden=true;renderEventClients();renderSettingsSummary()}
+ catch(e){if(options.signal?.aborted||e.name==='AbortError')return;$('client-list-error').textContent=e.message+'。可关闭后重新打开或刷新状态。';$('client-list-error').hidden=false;throw e}
 }
-async function loadConnectionSettings(){
- if(connectionLoading)return;connectionLoading=true;
- try{await Promise.allSettled([loadNotificationChannels(),loadEventClients()]);renderOutputRules()}
- finally{connectionLoading=false}
+async function loadConnectionSettings(options={}){
+ await Promise.allSettled([loadNotificationChannels(options),loadEventClients(options)]);
+ if(!options.signal?.aborted)renderOutputRules();
 }
 function refreshConnectionSurface(category){
  if(category==='telegram')loadNotificationChannels().catch(()=>{});

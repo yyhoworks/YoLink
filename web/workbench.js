@@ -49,7 +49,7 @@ async function openSettingsDrawer(category){
  if(category==='commands')body.append(commandSettings);
  if(category==='access')body.append($('settings-form'));
  if(category==='security')body.append($('password-form'));
- if(category==='advanced')body.append(advancedSettings);
+ if(category==='advanced'){body.append(advancedSettings);renderLegacyEventOptions();}
  if(category==='library'){
   $('integration-form').querySelector(':scope > h2').hidden=true;
   $('integration-form').querySelector(':scope > p').textContent=category==='telegram'?'无需重复填写已保存的地址和密钥。每条目录规则的「生成后操作」决定任务是否通知。':'保存后，再在需要的目录规则「生成后操作」中启用媒体库刷新。';

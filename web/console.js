@@ -1,6 +1,11 @@
 'use strict';
 let dashData=null,dashKey='',dashDays=7,dashChart='created',consoleBusy=false,inventoryData={items:[],page:1,pages:0},inventorySerial=0,integrationLoaded=false;
 let recordsContext={},lastNoticeLoad=0,inventoryMedia='',integrationData=null;
+const consoleScope=createCleanupScope();
+let lastDashboardLoad=0;
+let settingsNeedsRefresh=false;
+function consoleLeave(){consoleScope.cancel('dashboard');consoleScope.cancel('notices');consoleScope.cancel('settings');consoleBusy=false;}
+function consoleResume(){if(view==='settings'&&settingsNeedsRefresh&&!consoleScope.pending('settings'))loadIntegrations().catch(error=>toast(error.message));}
 const selectedRules=new Set(),selectedOutputs=new Set();
 const filterNames={all:'全部媒体',video:'仅影视',audio:'仅音乐',custom:'自定义'};
 const healthNames={unchecked:'未体检',healthy:'检查通过',missing:'本地缺失',modified:'内容已变化',outdated:'入口需更新',source_missing:'云端缺失',source_unknown:'来源待核实',unreadable:'无法读取',index_error:'索引异常'};
@@ -9,22 +14,23 @@ function msDate(v){return v?new Date(v).toLocaleString('zh-CN',{month:'2-digit',
 function consoleSection(title,body,action){return '<section class="panel console-section"><div class="section-heading"><h2>'+title+'</h2>'+(action||'')+'</div>'+body+'</section>'}
 function consoleRow(title,body,action){return '<div class="console-row"><div><strong>'+title+'</strong><p class="hint">'+body+'</p></div>'+(action||'')+'</div>'}
 function metric(label,value,detail,attrs){return '<button class="console-metric" '+attrs+'><span>'+label+'</span><strong>'+esc(value)+'</strong><small>'+detail+'</small></button>'}
-async function refreshConsole(){
- if(consoleBusy)return;consoleBusy=true;
- try{
-  if(view==='dashboard'){
-   try{dashData=await api('/api/dashboard?days='+dashDays);renderDashboard();$('dash-error').hidden=true}
-   catch(e){$('dash-updated').textContent=dashData?'上次更新于 '+msDate(dashData.time)+' · 读取失败':'读取失败，可重试';$('dash-error').textContent=e.message+(dashData?'。保留上次结果，请刷新重试。':'。请点击刷新重试。');$('dash-error').hidden=false;if(!dashData)$('dash-content').innerHTML='<div class="panel console-loading"><h2>暂时无法读取运行数据</h2><p class="hint">请检查服务状态，并点击上方刷新重试。</p></div>'}finally{$('dash-content').setAttribute('aria-busy','false')}
-  }
-  if(view==='notifications'||Date.now()-lastNoticeLoad>15000){await loadNotifications();lastNoticeLoad=Date.now()}
-  if(view==='settings'&&integrationLoaded)await loadIntegrations();
- }finally{consoleBusy=false}
+async function refreshConsole(options={}){
+ if($('app').hidden||document.hidden)return;
+ const work=[];
+ if(view==='dashboard'&&(options.force||Date.now()-lastDashboardLoad>=1000)&&(!consoleScope.pending('dashboard')||options.force))work.push((async()=>{
+  const request=consoleScope.latest('dashboard');
+  try{const data=await api('/api/dashboard?days='+dashDays,undefined,{signal:request.signal});if(!request.current()||view!=='dashboard')return;dashData=data;lastDashboardLoad=Date.now();preserveControlFocus(renderDashboard);$('dash-error').hidden=true;}
+  catch(e){if(!request.current()||e.name==='AbortError')return;$('dash-updated').textContent=dashData?'上次更新于 '+msDate(dashData.time)+' · 读取失败':'读取失败，可重试';$('dash-error').textContent=e.message+(dashData?'。保留上次结果，请刷新重试。':'。请点击刷新重试。');$('dash-error').hidden=false;if(!dashData)$('dash-content').innerHTML='<div class="panel console-loading"><h2>暂时无法读取运行数据</h2><p class="hint">请检查服务状态，并点击上方刷新重试。</p></div>';return false;}
+  finally{if(request.current())$('dash-content').setAttribute('aria-busy','false');request.finish();}
+ })());
+ if(!consoleScope.pending('notices')&&(options.force||Date.now()-lastNoticeLoad>=30000))work.push(loadNotifications().catch(error=>{if(!$('app').hidden){$('global-error').textContent=error.message+'。通知读取失败，稍后重试。';$('global-error').hidden=false;}return false;}));
+ return (await Promise.all(work)).every(result=>result!==false);
 }
 function consoleNav(next,context={}){
- if(next==='dashboard')refreshConsole();
+ if(next==='dashboard'){if(dashData)preserveControlFocus(renderDashboard);refreshConsole().catch(e=>toast(e.message));}
  if(next==='inventory'){inventoryMedia=context.media||'';if(inventoryMedia)['search','account','rule','status'].forEach(k=>$('inventory-'+k).value='');loadInventory()}
  if(next==='notifications')loadNotifications().catch(e=>toast(e.message));
- if(next==='settings'&&!integrationLoaded)loadIntegrations().catch(e=>toast(e.message));
+ if(next==='settings')loadIntegrations().catch(e=>toast(e.message));
 }
 function renderDashboard(){
  const d=dashData;if(!d)return;
@@ -136,7 +142,12 @@ async function loadInventory(page=1){
 }
 async function checkInventory(remote){if(!selectedOutputs.size)throw new Error('请先勾选需要体检的文件');$('inventory-count').textContent=remote?'正在核对云端来源…':'正在核对本地文件…';try{const data=await api('/api/outputs/check',{paths:[...selectedOutputs],remote});await loadInventory(inventoryData.page);toast('已完成 '+data.items.length+' 项体检')}catch(e){$('inventory-count').textContent=inventoryData.total+' 个登记的 STRM · 本次体检未完成';$('inventory-error').textContent=e.message+'。可重新体检，或刷新查看已经保存的结果。';$('inventory-error').hidden=false;throw e}}
 async function loadNotifications(){
- const data=await api('/api/notifications');const unread=data.items.filter(v=>!v.read).length;$('notice-count').textContent=unread||'';$('notice-list').innerHTML=data.items.length?data.items.map(v=>consoleRow('<span class="'+(v.level==='error'?'error':'')+'">'+esc(v.title)+'</span>'+(!v.read?' <span class="notice-unread">未读</span>':''),esc(v.body)+'<br>'+msDate(v.created))).join(''):'<div class="empty">有新增、生成失败或联动异常时，通知会显示在这里。</div>';
+ const request=consoleScope.latest('notices');
+ try{
+  const data=await api('/api/notifications',undefined,{signal:request.signal});if(!request.current())return;
+  lastNoticeLoad=Date.now();const unread=data.items.filter(v=>!v.read).length;$('notice-count').textContent=unread||'';
+  if(view==='notifications')$('notice-list').innerHTML=data.items.length?data.items.map(v=>consoleRow('<span class="'+(v.level==='error'?'error':'')+'">'+esc(v.title)+'</span>'+(!v.read?' <span class="notice-unread">未读</span>':''),esc(v.body)+'<br>'+msDate(v.created))).join(''):'<div class="empty">有新增、生成失败或联动异常时，通知会显示在这里。</div>';
+ }catch(error){if(request.current()&&error.name!=='AbortError')throw error;}finally{request.finish();}
 }
 function openConsoleRecords(kind,context={}){
  nav('records');const created=!!context.created;recordsContext=context;recordsSwitch(kind);$('records-search').value='';$('records-account').value='';$('records-days').value=kind==='generation'||context.date?'0':'1';$('records-event').value=created?'strm':kind==='playback'?'play':'';
@@ -157,8 +168,8 @@ document.addEventListener('click',event=>{
  if(b.dataset.ruleCheck)action(b,async()=>{const data=await api('/api/rules/'+b.dataset.ruleCheck+'/check',{});$('gen-check-result').hidden=false;$('gen-check-result').innerHTML='<h3>配置检查</h3>'+data.checks.map(v=>'<p class="'+(v.ok?'good':'error')+'">'+esc(v.name)+'：'+esc(v.note)+'</p>').join('')+'<p class="hint">'+esc(data.note)+'</p>';$('gen-check-result').scrollIntoView({block:'nearest'})});
  if(b.dataset.retryDelivery)action(b,async()=>{await api('/api/deliveries/'+b.dataset.retryDelivery+'/retry',{});await loadIntegrations();if(view==='records'&&recordsKind==='deliveries')await loadRecordDeliveries();toast('联动已加入重试队列')});
 });
-$('dash-refresh').addEventListener('click',e=>action(e.currentTarget,async()=>{await refreshConsole()}));
-document.addEventListener('change',e=>{if(e.target.id==='dash-days'){dashDays=Number(e.target.value);refreshConsole()}if(e.target.dataset.ruleSelect){if(e.target.checked)selectedRules.add(e.target.dataset.ruleSelect);else selectedRules.delete(e.target.dataset.ruleSelect);$('rule-result-count').textContent='已选择 '+selectedRules.size+' 条规则'}if(e.target.dataset.outputSelect){if(e.target.checked)selectedOutputs.add(e.target.dataset.outputSelect);else selectedOutputs.delete(e.target.dataset.outputSelect);updateOutputSelection()}});
+$('dash-refresh').addEventListener('click',e=>action(e.currentTarget,async()=>{await refreshConsole({force:true})}));
+document.addEventListener('change',e=>{if(e.target.id==='dash-days'){dashDays=Number(e.target.value);refreshConsole({force:true}).catch(error=>toast(error.message))}if(e.target.dataset.ruleSelect){if(e.target.checked)selectedRules.add(e.target.dataset.ruleSelect);else selectedRules.delete(e.target.dataset.ruleSelect);$('rule-result-count').textContent='已选择 '+selectedRules.size+' 条规则'}if(e.target.dataset.outputSelect){if(e.target.checked)selectedOutputs.add(e.target.dataset.outputSelect);else selectedOutputs.delete(e.target.dataset.outputSelect);updateOutputSelection()}});
 $('rule-filters').addEventListener('submit',e=>{e.preventDefault();renderRuleConsole()});
 $('rule-account-filter').addEventListener('change',renderRuleConsole);$('rule-status-filter').addEventListener('change',renderRuleConsole);
 $('rule-run-selected').addEventListener('click',e=>action(e.currentTarget,async()=>{if(!selectedRules.size)throw new Error('请先选择目录规则');let count=0,errors=[];for(const id of selectedRules){try{await api('/api/jobs',{rule:id});count++}catch(e){errors.push(e.message)}}await refresh();nav('tasks');toast('已提交 '+count+' 条规则'+(errors.length?'；'+errors.join('；'):''))}));
@@ -180,18 +191,24 @@ $('settings-form').insertAdjacentHTML('afterend',
  '<section class="generation-options"><h3>Webhook 通知</h3><label class="checkbox"><input id="webhook-enabled" type="checkbox">启用任务通知 Webhook</label><label>通知接收地址<input id="integration-webhook" type="password" autocomplete="new-password" placeholder="填写新地址；留空保留已有地址"><small id="integration-webhook-state" class="hint"></small></label><label>通知签名密钥（可选）<input id="integration-webhook-secret" type="password" autocomplete="new-password" placeholder="与接收端一致；留空保留已有密钥"><small id="integration-webhook-secret-state" class="hint"></small></label><p class="hint">发送 JSON 任务结果。Hermes 可直接接收通知；填写双方一致的签名密钥后，使用带时间戳的 HMAC-SHA256 签名验证。其他通知平台可通过网关转换格式。</p><button id="webhook-test" type="button">发送测试通知</button></section>'+
  '<div class="form-actions"><button type="submit" class="primary">保存联动设置</button><span id="integration-result" role="status"></span></div><section class="generation-options"><h3>最近联动发送</h3><div id="integration-deliveries"></div></section></form>');
 async function loadIntegrations(){
+ const request=consoleScope.latest('settings');
+ settingsNeedsRefresh=true;
  try{
- const data=await api('/api/integrations'),c=data.config;integrationData=data;
+ const data=await api('/api/integrations',undefined,{signal:request.signal});if(!request.current())return;
+ const c=data.config;integrationData=data;
  if(!integrationLoaded){$('integration-enabled').checked=c.enabled;$('integration-type').value=c.server_type||'emby';$('integration-base').value=c.base||'';$('integration-local').value=c.local_prefix||'';$('integration-remote').value=c.remote_prefix||'';$('integration-all').checked=c.refresh_all;$('webhook-enabled').checked=c.webhook_enabled;integrationLoaded=true}
  $('integration-key-state').textContent=c.has_api_key?'已有密钥，留空将保留':'尚未配置密钥';$('integration-webhook-state').textContent=c.has_webhook?'已有地址，留空将保留':'尚未配置通知接收地址';
  $('integration-webhook-secret-state').textContent=c.has_webhook_secret?'已有签名密钥，留空将保留':'未配置签名密钥，将发送普通 JSON';
  const labels={pending:'等待发送 / 重试',sent:'已发送',failed:'发送失败'};
  $('integration-deliveries').innerHTML=data.deliveries.length?data.deliveries.map(v=>consoleRow(v.kind==='library'?'媒体库刷新':'任务通知',esc(labels[v.status])+' · 尝试 '+v.attempts+' 次'+(v.error?'<br>'+esc(v.error):''),v.status==='failed'?'<button data-retry-delivery="'+esc(v.id)+'">重试</button>':'')).join(''):'<p class="hint">启用规则的生成后操作后，这里显示发送结果。</p>';
- if(typeof loadAutomation==='function')await loadAutomation();
+ if(typeof loadAutomation==='function')await loadAutomation({signal:request.signal});
+ if(!request.current())return;
  if(typeof renderSettingsSummary==='function')renderSettingsSummary();
- if(typeof loadConnectionSettings==='function')await loadConnectionSettings();
+ if(typeof loadConnectionSettings==='function')await loadConnectionSettings({signal:request.signal});
+ if(!request.current())return;
  if($('settings-overview-error'))$('settings-overview-error').hidden=true;
- }catch(e){if($('settings-overview-error')){$('settings-overview-error').textContent=e.message+'。保留上次结果，可点击刷新状态重试。';$('settings-overview-error').hidden=false}throw e}
+ settingsNeedsRefresh=false;
+ }catch(e){if(!request.current()||e.name==='AbortError')return;if($('settings-overview-error')){$('settings-overview-error').textContent=e.message+'。保留上次结果，可点击刷新状态重试。';$('settings-overview-error').hidden=false}throw e}finally{request.finish();}
 }
 $('integration-form').addEventListener('submit',e=>{e.preventDefault();action(e.submitter,async()=>{
  try{

@@ -10,6 +10,8 @@ function generationTab(tab,options={}){
  genTab=tab==='config'?'config':'status';localStorage.setItem('yolink-gen-tab',genTab);
  ['status','config'].forEach(name=>{const selected=genTab===name;genEl('gen-'+name).hidden=!selected;const button=genEl('gen-'+name+'-tab');button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1});
  if(options.write!==false)writeRoute(genTab==='config'?'config':'home');
+ if(typeof scheduleRefresh==='function')scheduleRefresh();
+ if(typeof icons==='function')icons();
 }
 function genOutputPath(value){const root=state.settings?.output_root||'/strm';return !value?'':value.startsWith('/')||/^[A-Za-z]:[\\/]/.test(value)?value:root.replace(/\/$/,'')+'/'+value}
 function genRuleName(id){return ruleBy(id)?.name||'已移除的目录'}
@@ -33,7 +35,7 @@ function renderGeneration(){
  else{title=automatic?'自动生成已开启':'准备就绪';copy=automatic?`${automatic} 个目录按各自间隔检查新增文件，也可以随时手动生成。`:`已配置 ${state.rules.length} 个目录。全量生成会扫描全部规则，已有相同内容自动跳过。`;setup='生成配置'}
  genEl('gen-banner-title').textContent=title;genEl('gen-banner-copy').textContent=copy;genEl('gen-setup').textContent=setup;
  const accountsKey=JSON.stringify(state.accounts.map(a=>[a.id,a.name,a.disabled]));
- if(genAccountsKey!==accountsKey){genAccountsKey=accountsKey;const current=genEl('gen-rule-account').value;genSetOptions(genEl('gen-rule-account'),state.accounts.filter(a=>!a.disabled).map(a=>({id:a.id,label:a.name})),current)}
+ if(genAccountsKey!==accountsKey&&genEl('gen-rule-form').hidden){genAccountsKey=accountsKey;const current=genEl('gen-rule-account').value;genSetOptions(genEl('gen-rule-account'),state.accounts.filter(a=>!a.disabled).map(a=>({id:a.id,label:a.name})),current)}
  const rulesKey=JSON.stringify([state.rules,accountsKey]);
  if(genRulesKey!==rulesKey){genRulesKey=rulesKey;renderGenerationRules()}
  const jobsKey=JSON.stringify([state.jobs,failures,genShowAllFailures]);

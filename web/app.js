@@ -103,6 +103,7 @@ const $ = (id) => document.getElementById(id);
 const names = { "139": "移动云盘 · 新个人云", "139old": "移动云盘 · 旧个人云", quark: "夸克网页 · Cookie", quarktv: "夸克 TV · 原文件", ali: "阿里云盘 · OpenAPI", "115": "115 网盘 · Cookie" };
 const statusNames = { queued: "排队中", running: "执行中", completed: "已完成", partial: "部分失败", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
 let state = { accounts: [], rules: [], jobs: [], media: [], settings: {} }, view = "dashboard", polling = false, toastTimer;
+const refreshLifecycle = { scope: createCleanupScope(), timer: null, last: 0, failures: 0, epoch: 0, initialized: false };
 const routes = /* @__PURE__ */ new Set(["dashboard", "inventory", "notifications", "more", "home", "config", "accounts", "files", "directories", "tasks", "playback", "maintenance", "settings", "records"]);
 let routeReady = false, activeRoute = "";
 function writeRoute(route, replace = false) {
@@ -117,7 +118,18 @@ function restoreRoute() {
 addEventListener("popstate", restoreRoute);
 addEventListener("hashchange", restoreRoute);
 const icons = () => {
-  if (window.lucide) lucide.createIcons();
+  if (!window.lucide) return;
+  const pending = [...document.querySelectorAll("i[data-lucide]")].filter((el) => !el.closest("[hidden]"));
+  if (!pending.length) return;
+  for (const el of pending) {
+    el.setAttribute("data-lucide-pending", el.getAttribute("data-lucide"));
+    el.removeAttribute("data-lucide");
+  }
+  lucide.createIcons({ nameAttr: "data-lucide-pending" });
+  for (const el of document.querySelectorAll("[data-lucide-pending]")) {
+    el.setAttribute("data-lucide", el.getAttribute("data-lucide-pending"));
+    el.removeAttribute("data-lucide-pending");
+  }
 };
 const toast = (message) => {
   $("toast").textContent = message;
@@ -140,14 +152,19 @@ async function action(button, fn) {
   } finally {
     button.disabled = false;
     button.removeAttribute("aria-busy");
-    if (!$("app").hidden) renderGeneration();
-    if (typeof updateOutputSelection === "function") updateOutputSelection();
+    if (!$("app").hidden && view === "home") preserveControlFocus(renderGeneration);
+    if (typeof updateOutputSelection === "function" && view === "inventory") updateOutputSelection();
     if (!button.isConnected) return;
     icons();
   }
 }
 function showLogin() {
   var _a;
+  refreshLifecycle.initialized = true;
+  refreshLifecycle.epoch++;
+  refreshLifecycle.scope.cancel("state");
+  clearTimeout(refreshLifecycle.timer);
+  if (typeof consoleLeave === "function") consoleLeave();
   if (typeof reliabilityLeave === "function") reliabilityLeave();
   recordsLeave();
   if (typeof closeSettingsDrawer === "function" && ((_a = $("settings-drawer")) == null ? void 0 : _a.open)) closeSettingsDrawer();
@@ -177,6 +194,7 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   const previousView = view;
   view = next;
   $("global-error").hidden = true;
+  if (previousView !== next && typeof consoleLeave === "function") consoleLeave();
   document.querySelectorAll(".view").forEach((el) => el.hidden = el.id !== "view-" + next);
   document.querySelectorAll(".sidebar [data-nav]").forEach((el) => {
     const selected = el.dataset.nav === next, parent = el.dataset.nav === "more" && ["files", "inventory", "records", "notifications", "maintenance", "settings"].includes(next);
@@ -189,6 +207,8 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   if (next === "home") generationTab(requested === "tasks" || options.restore && requested === "home" ? "status" : ["config", "directories"].includes(requested) ? "config" : localStorage.getItem("yolink-gen-tab") || generationTarget, { write: false });
   writeRoute(next === "home" && genTab === "config" ? "config" : next, options.replace);
   routeReady = true;
+  render();
+  scheduleRefresh();
   if (next === "files" && loadFiles) ensureCloudFiles();
   if (next === "records") recordsOpen();
   if (typeof consoleNav === "function") consoleNav(next, context);
@@ -196,24 +216,97 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   if (previousView !== next) window.scrollTo({ top: 0, behavior: "instant" });
   icons();
 }
-async function refresh() {
-  state = await api("/api/state");
-  showApp();
-  render();
-  if (typeof refreshConsole === "function") await refreshConsole();
-  $("global-error").hidden = true;
+function refreshDelay() {
+  const live = (view === "dashboard" || view === "home" && genTab === "status") && state.jobs.some(genActive);
+  return Math.min(6e4, (live ? 4e3 : 3e4) * 2 ** Math.min(refreshLifecycle.failures, 3));
+}
+function scheduleRefresh() {
+  clearTimeout(refreshLifecycle.timer);
+  if ($("app").hidden || document.hidden) return;
+  refreshLifecycle.timer = setTimeout(async () => {
+    if (refreshLifecycle.scope.pending("state")) {
+      scheduleRefresh();
+      return;
+    }
+    try {
+      await refresh({ background: true });
+    } catch (error) {
+      if (error.name !== "AbortError" && !$("app").hidden) {
+        $("global-error").textContent = error.message + "。保留上次数据，稍后自动重试。";
+        $("global-error").hidden = false;
+      }
+    }
+  }, refreshDelay());
+}
+async function refresh(options = {}) {
+  if (options.background && ($("app").hidden || document.hidden)) return false;
+  const request = refreshLifecycle.scope.latest("state"), epoch = refreshLifecycle.epoch;
+  clearTimeout(refreshLifecycle.timer);
+  polling = true;
+  try {
+    const data = await api("/api/state", void 0, { signal: request.signal });
+    if (!request.current() || epoch !== refreshLifecycle.epoch) return false;
+    state = data;
+    refreshLifecycle.initialized = true;
+    refreshLifecycle.last = Date.now();
+    showApp();
+    render();
+    if (typeof consoleResume === "function") consoleResume();
+    const complete = typeof refreshConsole !== "function" || await refreshConsole();
+    if (!request.current() || epoch !== refreshLifecycle.epoch) return false;
+    if (complete) {
+      refreshLifecycle.failures = 0;
+      $("global-error").hidden = true;
+    } else refreshLifecycle.failures++;
+    return true;
+  } catch (error) {
+    if (!request.current() || epoch !== refreshLifecycle.epoch || error.name === "AbortError") return false;
+    refreshLifecycle.failures++;
+    throw error;
+  } finally {
+    if (request.current()) {
+      request.finish();
+      polling = false;
+      scheduleRefresh();
+    }
+  }
+}
+function preserveControlFocus(update) {
+  var _a, _b;
+  const focused = document.activeElement;
+  const anchor = (focused == null ? void 0 : focused.matches("summary")) ? focused.closest("details") : focused;
+  const id = anchor == null ? void 0 : anchor.id, scopeID = (_b = (_a = anchor == null ? void 0 : anchor.parentElement) == null ? void 0 : _a.closest("[id]")) == null ? void 0 : _b.id, data = anchor ? [...anchor.attributes].filter((a) => a.name.startsWith("data-") && !["data-glass-adapted", "data-glass-role"].includes(a.name)).map((a) => [a.name, a.value]) : [];
+  update();
+  if (!focused || focused.isConnected || !id && !data.length) return;
+  const container = scopeID ? $(scopeID) : document;
+  const replacement = id ? $(id) : [...(container == null ? void 0 : container.querySelectorAll(anchor.tagName)) || []].find((el) => data.every(([name, value]) => el.getAttribute(name) === value));
+  const target = focused.matches("summary") ? replacement == null ? void 0 : replacement.querySelector("summary") : replacement;
+  if (target && !target.closest("[hidden]")) target.focus({ preventScroll: true });
 }
 const accountBy = (id) => state.accounts.find((a) => a.id === id);
 const ruleBy = (id) => state.rules.find((r) => r.id === id);
 const date = (t) => new Date(t * 1e3).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 function render() {
-  renderGeneration();
-  renderCloudManagement();
-  renderPlaybackTools();
-  renderPlaybackMedia();
-  if (document.activeElement !== $("public-base")) $("public-base").value = state.settings.public_base || "";
-  $("output-root").value = state.settings.output_root || "";
-  $("event-token").value = state.event_token || "";
+  preserveControlFocus(() => {
+    var _a, _b;
+    if (view === "home") {
+      renderGeneration();
+      renderIngestHistory();
+    }
+    if (view === "accounts" || view === "files") renderCloudManagement();
+    if (view === "records" && recordsKind === "tools") {
+      renderPlaybackTools();
+      renderPlaybackMedia();
+    }
+    if (view === "maintenance") renderMaintenanceTools();
+    if (view === "settings") {
+      if (!((_a = $("settings-drawer")) == null ? void 0 : _a.open) && document.activeElement !== $("public-base")) $("public-base").value = state.settings.public_base || "";
+      $("output-root").value = state.settings.output_root || "";
+      $("event-token").value = state.event_token || "";
+      if (!((_b = $("settings-drawer")) == null ? void 0 : _b.open)) renderLegacyEventOptions();
+      if (typeof renderSettingsSummary === "function") renderSettingsSummary();
+    }
+  });
   icons();
 }
 function renderPlaybackMedia() {
@@ -373,18 +466,24 @@ $("copy-event").addEventListener("click", (e) => action(e.currentTarget, async (
   await copy(state.event_token);
   toast("兼容接入凭据已复制");
 }));
-setInterval(async () => {
-  if (polling || $("app").hidden || document.hidden) return;
-  polling = true;
-  try {
-    await refresh();
-  } catch (e) {
-    $("global-error").textContent = e.message;
-    $("global-error").hidden = false;
-  } finally {
-    polling = false;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearTimeout(refreshLifecycle.timer);
+    refreshLifecycle.scope.cancel("state");
+    if (typeof consoleLeave === "function") consoleLeave();
+    return;
   }
-}, 4e3);
+  if (!refreshLifecycle.initialized || !$("app").hidden) refresh().then((applied) => {
+    if (applied && !routeReady) nav(view, true, {}, { replace: true, restore: true });
+    if (applied && typeof consoleResume === "function") consoleResume();
+  }).catch((error) => {
+    if (!refreshLifecycle.initialized) showLogin();
+    else if (error.name !== "AbortError") {
+      $("global-error").textContent = error.message;
+      $("global-error").hidden = false;
+    }
+  });
+});
 document.querySelectorAll(".sidebar button").forEach((el) => {
   const label = (el.querySelector(".nav-long") || el).textContent.trim();
   el.setAttribute("aria-label", label);
@@ -394,7 +493,9 @@ providerFields();
 icons();
 const initial = location.hash.slice(1);
 if (routes.has(initial)) view = initial;
-refresh().then(() => nav(view, true, {}, { replace: true, restore: true })).catch(() => showLogin());
+refresh().then((applied) => {
+  if (applied) nav(view, true, {}, { replace: true, restore: true });
+}).catch(() => showLogin());
 $("password-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const error = $("password-change-error");

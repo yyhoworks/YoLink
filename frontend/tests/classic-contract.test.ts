@@ -7,7 +7,7 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 const generated = read('../../web/app.js');
 
 describe('classic script migration contract', () => {
-  it('keeps all 33 original declarations and only the three intended infrastructure bindings', () => {
+  it('keeps original declarations and the explicit API/lifecycle infrastructure bindings', () => {
     const tree = parse(generated, { ecmaVersion: 'latest', sourceType: 'script' });
     const bindings = tree.body.flatMap(node => {
       if (node.type === 'VariableDeclaration') {
@@ -26,6 +26,10 @@ describe('classic script migration contract', () => {
       { name: 'createAPI', kind: 'function' },
       { name: 'requestAPI', kind: 'const' },
       { name: 'createCleanupScope', kind: 'function' },
+      { name: 'refreshLifecycle', kind: 'const' },
+      { name: 'refreshDelay', kind: 'function' },
+      { name: 'scheduleRefresh', kind: 'function' },
+      { name: 'preserveControlFocus', kind: 'function' },
     ].sort(sort));
     expect(tree.body[0]).toMatchObject({ type: 'ExpressionStatement', directive: 'use strict' });
   });

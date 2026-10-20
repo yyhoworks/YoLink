@@ -33,6 +33,7 @@ function recordsSwitch(kind){
  $('records-event').innerHTML='<option value="">全部环节</option>'+events.map(v=>`<option value="${v}">${recordEvents[v]}</option>`).join('');
  $('records-explanation').textContent=kind==='generation'?'查看每次任务与文件的新增、跳过、预览和失败；已有 STRM 索引也可查。':kind==='playback'?'同一媒体、来源和客户端，相邻不超过 30 秒的同类请求汇总展示。失败单独列出；点击文件名查看每次请求的解析与响应。这些请求组不等于观看次数，已返回 302 表示跳转已发出。':'只展示手动「仅解析」和「取流自检」的最终结果。普通播放的解析过程可在播放记录详情中查看。';
  if(typeof syncRecordSections==='function')syncRecordSections();
+ if(kind==='tools'){renderPlaybackTools();renderPlaybackMedia();}
  recordsLoad();
 }
 async function recordsLoad(page=1){

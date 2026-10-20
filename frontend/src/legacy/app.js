@@ -8,16 +8,24 @@ const $=id=>document.getElementById(id);
 const names={'139':'移动云盘 · 新个人云','139old':'移动云盘 · 旧个人云',quark:'夸克网页 · Cookie',quarktv:'夸克 TV · 原文件',ali:'阿里云盘 · OpenAPI','115':'115 网盘 · Cookie'};
 const statusNames={queued:'排队中',running:'执行中',completed:'已完成',partial:'部分失败',failed:'失败',cancelled:'已取消',interrupted:'已中断'};
 let state={accounts:[],rules:[],jobs:[],media:[],settings:{}},view='dashboard',polling=false,toastTimer;
+const refreshLifecycle={scope:createCleanupScope(),timer:null,last:0,failures:0,epoch:0,initialized:false};
 const routes=new Set(['dashboard','inventory','notifications','more','home','config','accounts','files','directories','tasks','playback','maintenance','settings','records']);
 let routeReady=false,activeRoute='';
 function writeRoute(route,replace=false){activeRoute=route;const hash='#'+route;if(location.hash!==hash)history[replace||!routeReady?'replaceState':'pushState'](null,'',hash)}
 function restoreRoute(){const route=location.hash.slice(1);if(routes.has(route)&&route!==activeRoute)nav(route,true,{}, {restore:true})}
 addEventListener('popstate',restoreRoute);addEventListener('hashchange',restoreRoute);
-const icons=()=>{if(window.lucide)lucide.createIcons()};
+const icons=()=>{
+ if(!window.lucide)return;
+ const pending=[...document.querySelectorAll('i[data-lucide]')].filter(el=>!el.closest('[hidden]'));
+ if(!pending.length)return;
+ for(const el of pending){el.setAttribute('data-lucide-pending',el.getAttribute('data-lucide'));el.removeAttribute('data-lucide');}
+ lucide.createIcons({nameAttr:'data-lucide-pending'});
+ for(const el of document.querySelectorAll('[data-lucide-pending]')){el.setAttribute('data-lucide',el.getAttribute('data-lucide-pending'));el.removeAttribute('data-lucide-pending');}
+};
 const toast=message=>{$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4500)};
 async function api(path,body,options={}){return requestAPI(path,body,options)}
-async function action(button,fn){button.disabled=true;button.setAttribute('aria-busy','true');try{await fn()}catch(e){toast(e.message);$('global-error').textContent=e.message;$('global-error').hidden=false}finally{button.disabled=false;button.removeAttribute('aria-busy');if(!$('app').hidden)renderGeneration();if(typeof updateOutputSelection==='function')updateOutputSelection();if(!button.isConnected) return;icons()}}
-function showLogin(){if(typeof reliabilityLeave==='function')reliabilityLeave();recordsLeave();if(typeof closeSettingsDrawer==='function'&&$('settings-drawer')?.open)closeSettingsDrawer();$('login').hidden=false;$('app').hidden=true}
+async function action(button,fn){button.disabled=true;button.setAttribute('aria-busy','true');try{await fn()}catch(e){toast(e.message);$('global-error').textContent=e.message;$('global-error').hidden=false}finally{button.disabled=false;button.removeAttribute('aria-busy');if(!$('app').hidden&&view==='home')preserveControlFocus(renderGeneration);if(typeof updateOutputSelection==='function'&&view==='inventory')updateOutputSelection();if(!button.isConnected) return;icons()}}
+function showLogin(){refreshLifecycle.initialized=true;refreshLifecycle.epoch++;refreshLifecycle.scope.cancel('state');clearTimeout(refreshLifecycle.timer);if(typeof consoleLeave==='function')consoleLeave();if(typeof reliabilityLeave==='function')reliabilityLeave();recordsLeave();if(typeof closeSettingsDrawer==='function'&&$('settings-drawer')?.open)closeSettingsDrawer();$('login').hidden=false;$('app').hidden=true}
 function showApp(){$('login').hidden=true;$('app').hidden=false}
 function nav(next,loadFiles=true,context={},options={}){
  if(next==='playback'){next='records';recordsKind='tools'}
@@ -28,24 +36,72 @@ function nav(next,loadFiles=true,context={},options={}){
  if(['config','directories','tasks'].includes(next))next='home';
  if(typeof reliabilityLeave==='function'&&view!==next)reliabilityLeave(next);
  const previousView=view;view=next;$('global-error').hidden=true;
+ if(previousView!==next&&typeof consoleLeave==='function')consoleLeave();
  document.querySelectorAll('.view').forEach(el=>el.hidden=el.id!=='view-'+next);
  document.querySelectorAll('.sidebar [data-nav]').forEach(el=>{const selected=el.dataset.nav===next,parent=el.dataset.nav==='more'&&['files','inventory','records','notifications','maintenance','settings'].includes(next);el.classList.toggle('active',selected||parent);if(selected)el.setAttribute('aria-current','page');else if(parent)el.setAttribute('aria-current','true');else el.removeAttribute('aria-current')});
  $('location').textContent={dashboard:'仪表盘',inventory:'生成文件',notifications:'通知',more:'更多',home:'STRM 生成',accounts:'网盘管理',files:'文件浏览',playback:'诊断工具',settings:'服务设置',maintenance:'迁移维护',records:'运行记录'}[next]||'工作台';
  if(next==='home')generationTab(requested==='tasks'||options.restore&&requested==='home'?'status':['config','directories'].includes(requested)?'config':localStorage.getItem('yolink-gen-tab')||generationTarget,{write:false});
  writeRoute(next==='home'&&genTab==='config'?'config':next,options.replace);routeReady=true;
+ render();scheduleRefresh();
  if(next==='files'&&loadFiles)ensureCloudFiles();if(next==='records')recordsOpen();if(typeof consoleNav==='function')consoleNav(next,context);document.title='YoLink · '+$('location').textContent;if(previousView!==next)window.scrollTo({top:0,behavior:'instant'});icons();
 }
-async function refresh(){state=await api('/api/state');showApp();render();if(typeof refreshConsole==='function')await refreshConsole();$('global-error').hidden=true}
+function refreshDelay(){
+ const live=(view==='dashboard'||view==='home'&&genTab==='status')&&state.jobs.some(genActive);
+ return Math.min(60000,(live?4000:30000)*2**Math.min(refreshLifecycle.failures,3));
+}
+function scheduleRefresh(){
+ clearTimeout(refreshLifecycle.timer);
+ if($('app').hidden||document.hidden)return;
+ refreshLifecycle.timer=setTimeout(async()=>{
+  if(refreshLifecycle.scope.pending('state')){scheduleRefresh();return;}
+  try{await refresh({background:true});}
+  catch(error){if(error.name!=='AbortError'&&!$('app').hidden){$('global-error').textContent=error.message+'。保留上次数据，稍后自动重试。';$('global-error').hidden=false;}}
+ },refreshDelay());
+}
+async function refresh(options={}){
+ if(options.background&&($('app').hidden||document.hidden))return false;
+ const request=refreshLifecycle.scope.latest('state'),epoch=refreshLifecycle.epoch;
+ clearTimeout(refreshLifecycle.timer);polling=true;
+ try{
+  const data=await api('/api/state',undefined,{signal:request.signal});
+  if(!request.current()||epoch!==refreshLifecycle.epoch)return false;
+  state=data;refreshLifecycle.initialized=true;refreshLifecycle.last=Date.now();showApp();render();
+  if(typeof consoleResume==='function')consoleResume();
+  const complete=typeof refreshConsole!=='function'||await refreshConsole();
+  if(!request.current()||epoch!==refreshLifecycle.epoch)return false;
+  if(complete){refreshLifecycle.failures=0;$('global-error').hidden=true;}else refreshLifecycle.failures++;
+  return true;
+ }catch(error){if(!request.current()||epoch!==refreshLifecycle.epoch||error.name==='AbortError')return false;refreshLifecycle.failures++;throw error;}
+ finally{if(request.current()){request.finish();polling=false;scheduleRefresh();}}
+}
+// Preserve identity, not stale HTML or field values, across list updates.
+function preserveControlFocus(update){
+ const focused=document.activeElement;
+ const anchor=focused?.matches('summary')?focused.closest('details'):focused;
+ const id=anchor?.id,scopeID=anchor?.parentElement?.closest('[id]')?.id,data=anchor?[...anchor.attributes].filter(a=>a.name.startsWith('data-')&&!['data-glass-adapted','data-glass-role'].includes(a.name)).map(a=>[a.name,a.value]):[];
+ update();
+ if(!focused||focused.isConnected||(!id&&!data.length))return;
+ const container=scopeID?$(scopeID):document;
+ const replacement=id?$(id):[...(container?.querySelectorAll(anchor.tagName)||[])].find(el=>data.every(([name,value])=>el.getAttribute(name)===value));
+ const target=focused.matches('summary')?replacement?.querySelector('summary'):replacement;
+ if(target&&!target.closest('[hidden]'))target.focus({preventScroll:true});
+}
 const accountBy=id=>state.accounts.find(a=>a.id===id);
 const ruleBy=id=>state.rules.find(r=>r.id===id);
 const date=t=>new Date(t*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 function render(){
- renderGeneration();
- renderCloudManagement();
- renderPlaybackTools();
- renderPlaybackMedia();
- if(document.activeElement!==$('public-base'))$('public-base').value=state.settings.public_base||'';
- $('output-root').value=state.settings.output_root||'';$('event-token').value=state.event_token||'';icons();
+ preserveControlFocus(()=>{
+  if(view==='home'){renderGeneration();renderIngestHistory();}
+  if(view==='accounts'||view==='files')renderCloudManagement();
+  if(view==='records'&&recordsKind==='tools'){renderPlaybackTools();renderPlaybackMedia();}
+  if(view==='maintenance')renderMaintenanceTools();
+  if(view==='settings'){
+   if(!$('settings-drawer')?.open&&document.activeElement!==$('public-base'))$('public-base').value=state.settings.public_base||'';
+   $('output-root').value=state.settings.output_root||'';$('event-token').value=state.event_token||'';
+   if(!$('settings-drawer')?.open)renderLegacyEventOptions();
+   if(typeof renderSettingsSummary==='function')renderSettingsSummary();
+  }
+ });icons();
 }
 function renderPlaybackMedia(){
  const list=$('media-list'),rows=new Map([...list.querySelectorAll('[data-media-id]')].map(row=>[row.dataset.mediaId,row]));
@@ -93,11 +149,14 @@ $('provider').addEventListener('change',providerFields);$('reset-account').addEv
 $('account-form').addEventListener('submit',e=>{e.preventDefault();action(e.submitter,async()=>{const secrets={};document.querySelectorAll('[data-secret]').forEach(el=>{if(el.value.trim())secrets[el.dataset.secret]=el.value.trim()});const saved=await api('/api/accounts',{id:$('account-id').value,name:$('account-name').value.trim(),provider:$('provider').value,root:$('account-root').value.trim(),drive:$('account-drive').value.trim(),allow_proxy:$('allow-proxy').checked,secrets});document.querySelectorAll('[data-secret]').forEach(el=>el.value='');$('account-id').value=saved.id;$('provider').disabled=true;$('account-drive').disabled=true;$('account-form-title').textContent='编辑 '+saved.name;await refresh();$('account-form').hidden=true;toast('账号已保存，可点击连接测试或浏览文件')})});
 $('settings-form').addEventListener('submit',e=>{e.preventDefault();action(e.submitter,async()=>{await api('/api/settings',{public_base:$('public-base').value.trim()});await refresh();$('settings-result').textContent='已保存，之后生成的 STRM 将使用这个地址。';toast('播放入口已保存')})});
 $('copy-event').addEventListener('click',e=>action(e.currentTarget,async()=>{await copy(state.event_token);toast('兼容接入凭据已复制')}));
-setInterval(async()=>{if(polling||$('app').hidden||document.hidden)return;polling=true;try{await refresh()}catch(e){$('global-error').textContent=e.message;$('global-error').hidden=false}finally{polling=false}},4000);
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden){clearTimeout(refreshLifecycle.timer);refreshLifecycle.scope.cancel('state');if(typeof consoleLeave==='function')consoleLeave();return;}
+ if(!refreshLifecycle.initialized||!$('app').hidden)refresh().then(applied=>{if(applied&&!routeReady)nav(view,true,{}, {replace:true,restore:true});if(applied&&typeof consoleResume==='function')consoleResume();}).catch(error=>{if(!refreshLifecycle.initialized)showLogin();else if(error.name!=='AbortError'){$('global-error').textContent=error.message;$('global-error').hidden=false;}});
+});
 document.querySelectorAll('.sidebar button').forEach(el=>{const label=(el.querySelector('.nav-long')||el).textContent.trim();el.setAttribute('aria-label',label);el.setAttribute('title',label)});
 providerFields();icons();
 const initial=location.hash.slice(1);if(routes.has(initial))view=initial;
-refresh().then(()=>nav(view,true,{}, {replace:true,restore:true})).catch(()=>showLogin());
+refresh().then(applied=>{if(applied)nav(view,true,{}, {replace:true,restore:true})}).catch(()=>showLogin());
 
 $('password-form').addEventListener('submit',event=>{event.preventDefault();const error=$('password-change-error');error.hidden=true;error.textContent='';
  if($('new-password').value!==$('confirm-password').value){error.textContent='两次输入的新密码不一致';error.hidden=false;$('confirm-password').focus();return}
