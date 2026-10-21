@@ -99,11 +99,12 @@ tr:hover td{background:rgba(51,65,85,.22)}
 .capacity-unavailable{background:transparent;padding:8px 0;color:var(--muted);font-size:12px}
 .cloud-capabilities{padding:0 22px;margin:14px 0 18px;gap:8px}
 .cloud-capabilities>span{font-size:12px;border:0;border-radius:5px;padding:4px 7px}
+.cloud-card>[data-account-health]{margin:0 12px 14px;padding:5px 10px}
 .cloud-main-actions{padding:0 22px;margin:0 0 18px;gap:10px}
 .cloud-main-actions button:first-child{background:var(--primary-fill);color:var(--primary-ink);font-weight:600;border-color:transparent}
 .cloud-main-actions button:first-child:hover{background:var(--primary-hover)}
-.cloud-card-footer{margin:0 22px;padding:12px 0;border-top:1px solid var(--border);gap:14px}
-.cloud-card-footer>button{color:var(--muted);font-size:12px}
+.cloud-card-footer{margin:0 22px;padding:12px 0;border-top:1px solid var(--border);gap:8px}
+.cloud-card-footer>button{padding:6px 12px;border-radius:8px;color:var(--muted);font-size:12px}
 .cloud-more>div{background:#161e2e;border-color:var(--border);box-shadow:0 10px 24px rgba(0,0,0,.4)}
 .cloud-last-check{margin:0;padding:0 22px 18px;color:var(--muted);line-height:1.7}
 .cloud-last-check.error{color:var(--danger)}

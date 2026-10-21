@@ -27,14 +27,17 @@
 [data-theme=butter] button:hover{background:var(--control-hover);border-color:var(--border-strong);color:var(--ink)}
 [data-theme=butter] button.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;box-shadow:none}
 [data-theme=butter] button.primary:hover{background:var(--accent);color:var(--accent-ink);filter:brightness(.96)}
-[data-theme=butter] button.text{color:var(--info);background:transparent;border-color:transparent}
+[data-theme=butter] button.text{color:var(--info);background:transparent;border-color:transparent;padding:6px 10px;border-radius:8px}
 [data-theme=butter] button.text:hover{color:var(--ink)}
 [data-theme=butter] button.text.error{color:var(--danger)}
 [data-theme=butter] .record-name:hover{color:var(--palette-strong);text-decoration:underline;text-underline-offset:3px;background:transparent}
 [data-theme=butter] .record-name,[data-theme=butter] .record-name:hover,
 [data-theme=butter] .file-name-button,[data-theme=butter] .file-name-button:hover{background:transparent;border:0;border-radius:0}
-[data-theme=butter] .generation-tabs button,[data-theme=butter] .records-tabs button{background:transparent;border-radius:0}
+[data-theme=butter] .generation-tabs button,[data-theme=butter] .records-tabs button{background:transparent;border-radius:8px 8px 0 0;padding:10px 12px}
 [data-theme=butter] .generation-tabs button:hover,[data-theme=butter] .records-tabs button:hover{background:var(--soft)}
+[data-theme=butter] .cloud-card-footer{gap:8px}
+[data-theme=butter] .cloud-card-footer>button{padding:6px 12px;min-height:32px;border-radius:8px;font-size:12px;gap:6px}
+[data-theme=butter] .cloud-more summary{min-width:32px;min-height:32px;padding:0 8px;border-radius:8px}
 /* Accent fills stay yellow; interactive text uses the palette's readable foreground. */
 [data-theme=butter] .job-details>summary,
 [data-theme=butter] .inventory-mobile-detail>summary,
@@ -236,7 +239,7 @@
 [data-theme=butter][data-style=glass]{--glass-record-tint:rgba(255,255,255,var(--glass-record-alpha,.24));--record-panel-fill:linear-gradient(var(--glass-record-tint),var(--glass-record-tint)),var(--glass-fill)}
 [data-theme=butter][data-style=glass][data-glass-text=light]{--glass-record-tint:rgba(23,33,43,var(--glass-record-alpha,.24))}
 [data-theme=butter][data-style=glass] #records-table-panel{background:var(--record-panel-fill);backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%);-webkit-backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%)}
-[data-theme=butter][data-style=glass] :is(.records-filters,.rule-filters,.console-filters){background:var(--record-panel-fill);border:1px solid var(--glass-border);border-radius:16px;padding:10px 12px;backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%);-webkit-backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%)}
+[data-theme=butter][data-style=glass] :is(.records-filters,.rule-filters,.console-filters,.files-toolbar){background:var(--record-panel-fill);border:1px solid var(--glass-border);border-radius:16px;padding:10px 12px;backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%);-webkit-backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%)}
 [data-theme=butter][data-style=glass] :is(.records-caption,.records-pagination,.records-footer){background:var(--record-panel-fill);border:1px solid var(--glass-border);border-radius:14px;padding:8px 14px;backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%);-webkit-backdrop-filter:blur(var(--glass-blur,14px)) saturate(65%)}
 [data-theme=butter][data-style=glass] .bw-bar-track i{background:var(--ink)}
 [data-theme=butter][data-style=glass] select option{color:#17212b}
@@ -244,7 +247,7 @@
 @media(min-width:761px){[data-theme=butter] #view-more .more-menu>button:is([data-nav=files],[data-nav=records],[data-nav=notifications],[data-nav=settings]){display:none}}
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more){[data-theme=butter][data-style=glass][data-glass-text=light]{--panel:#17212b;--surface:#17212b}}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){[data-theme=butter][data-style=glass][data-glass-text=light]{--panel:#17212b;--surface:#17212b}[data-theme=butter][data-style=glass][data-glass-text] .cloud-more>div{background:var(--panel)}}
-@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){[data-theme=butter][data-style=glass] :is(#records-table-panel,.records-filters,.rule-filters,.console-filters,.records-caption,.records-pagination,.records-footer){backdrop-filter:none;-webkit-backdrop-filter:none}}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){[data-theme=butter][data-style=glass] :is(#records-table-panel,.records-filters,.rule-filters,.console-filters,.files-toolbar,.records-caption,.records-pagination,.records-footer){backdrop-filter:none;-webkit-backdrop-filter:none}}
 @media(max-width:760px){[data-theme=butter][data-style=glass] :is(.file-view-mode button,.file-name-button,.breadcrumbs button,.files-path-row>button){min-height:44px}[data-theme=butter][data-style=glass] :is(.file-view-mode button,.files-path-row>button){min-width:44px}}
 @media(min-width:761px) and (max-width:1180px){[data-theme=butter] .butter-header{flex-wrap:wrap;gap:20px;margin-bottom:32px}[data-theme=butter] .butter-header .sidebar{order:3;flex-basis:100%}[data-theme=butter] .butter-header-actions{margin-left:auto}.bw-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bw-overview{flex-wrap:wrap}.bw-summary{padding-bottom:0}.bw-recent,.bw-health,.bw-issues{grid-column:auto;grid-row:auto;margin-top:0}}
 @media(max-width:760px){

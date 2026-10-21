@@ -146,6 +146,31 @@ test('cloud-more compact menu popover remains high-contrast in glass modes and f
  await checkContrast([255,255,255]);
  await page.getByRole('button',{name:'关闭皮肤管理',exact:true}).click();
 
+ const footerPads=await page.locator('.cloud-card').first().locator('.cloud-card-footer > button').evaluateAll(btns=>btns.map(b=>{
+  const cs=getComputedStyle(b),rect=b.getBoundingClientRect(),range=document.createRange();
+  range.selectNodeContents(b);
+  const c=range.getBoundingClientRect();
+  return{pl:parseFloat(cs.paddingLeft),pr:parseFloat(cs.paddingRight),leftGap:c.left-rect.left,rightGap:rect.right-c.right};
+ }));
+ for(const p of footerPads){
+  expect(p.pl).toBeGreaterThanOrEqual(10);
+  expect(p.pr).toBeGreaterThanOrEqual(10);
+  expect(p.leftGap).toBeGreaterThanOrEqual(8);
+  expect(p.rightGap).toBeGreaterThanOrEqual(8);
+ }
+ const healthBtn=await page.locator('.cloud-card').first().locator('[data-account-health]').evaluate(el=>{
+  const cs=getComputedStyle(el),r=el.getBoundingClientRect(),pr=el.parentElement!.getBoundingClientRect();
+  return{pl:parseFloat(cs.paddingLeft),pr:parseFloat(cs.paddingRight),ratio:r.width/pr.width};
+ });
+ expect(healthBtn.pl).toBeGreaterThanOrEqual(8);
+ expect(healthBtn.pr).toBeGreaterThanOrEqual(8);
+ expect(healthBtn.ratio).toBeLessThan(0.5);
+
+ await page.locator('.sidebar [data-nav="files"]').click();
+ await expect(page.getByLabel('当前网盘')).toBeVisible();
+ await expect(page.getByLabel('筛选当前目录')).toBeVisible();
+ await expect(page.getByLabel('排序')).toBeVisible();
+
  await page.locator('.sidebar [data-nav="records"]').click();
  await expect(page.getByLabel('搜索文件、路径或客户端')).toHaveAttribute('placeholder','搜索文件名、输出路径、IP、PotPlayer…');
  const recordsTops=await page.locator('#records-filter-form :is(input,select,button):visible').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().top)));
