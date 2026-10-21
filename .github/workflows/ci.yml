@@ -1,4 +1,4 @@
-# Minimal CI: Go build/vet/test plus the frontend check suite.
+# Go, Windows authentication/recovery, container permissions and frontend checks.
 # No secrets are used or required by this workflow.
 name: CI
 
@@ -35,6 +35,26 @@ jobs:
       # - Browser E2E: YOLINK_BROWSER_E2E=1 / YOLINK_CHANGES_BROWSER_E2E=1
       #   plus installed frontend dependencies and Microsoft Edge
       #   (see reliability_browser_test.go, change_browser_test.go).
+
+  windows:
+    name: Windows auth and migration
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -count=1 -run '^(TestPassword|TestCredentialPublication|TestInitialPassword|TestSessionExpiry|TestInplace|TestStartupPermissions)' .
+
+  docker:
+    name: Docker install and upgrade permissions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker build --tag yolink:permissions-check .
+      - run: python3 scripts/verify-docker-permissions.py --image yolink:permissions-check
 
   frontend:
     name: Frontend check
