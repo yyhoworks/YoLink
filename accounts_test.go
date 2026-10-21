@@ -133,9 +133,11 @@ func TestQuotaParsesProviderUnitsAndRejectsMissingUsage(t *testing.T) {
 	}{
 		{"139", "/user/disk/quota/detail", `{"success":true,"data":{"diskSize":200,"freeDiskSize":50}}`, 200 * 1024 * 1024, 150 * 1024 * 1024, true},
 		{"quark", "/1/clouddrive/member", `{"status":200,"data":{"total_capacity":2000,"use_capacity":500}}`, 2000, 500, true},
+		{"quarktv", "/user", `{"status":0,"errno":0,"data":{"capacity":6597069766656,"used":3834053456518}}`, 6597069766656, 3834053456518, true},
 		{"ali", "/adrive/v1.0/user/getSpaceInfo", `{"personal_space_info":{"total_size":10000,"used_size":3000}}`, 10000, 3000, true},
 		{"139", "/user/disk/quota/detail", `{"success":true,"data":{"diskSize":200}}`, 0, 0, false},
 		{"quark", "/1/clouddrive/member", `{"status":200,"data":{"total_capacity":2000}}`, 0, 0, false},
+		{"quarktv", "/user", `{"status":0,"errno":0,"data":{"capacity":6597069766656}}`, 0, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider+tc.body, func(t *testing.T) {

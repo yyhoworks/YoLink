@@ -243,12 +243,21 @@ func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request) {
 	s.accountMutation(w, r, true, false)
 }
 
+func supportsQuota(provider string) bool {
+	switch provider {
+	case "115", "139", "139old", "quark", "quarktv", "ali":
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *Providers) Quota(ctx context.Context, id string) (usage QuotaUsage, err error) {
 	observe := p.beginCloudObservation(ctx, id, "quota")
 	defer func() { observe(err) }()
 	// Capability is known without refreshing a token or contacting the network.
 	// An unsupported quota query must not trigger an unrelated login attempt.
-	if a, er := p.s.account(id); er == nil && !a.Disabled && a.Provider == "quarktv" {
+	if a, er := p.s.account(id); er == nil && !a.Disabled && !supportsQuota(a.Provider) {
 		return usage, &CloudError{Kind: "unsupported", Code: "quota_unsupported", Message: "此通道暂未提供容量查询，仍可浏览和生成 STRM"}
 	}
 	err = p.with(ctx, id, func(a *Account) error {
@@ -275,6 +284,16 @@ func (p *Providers) Quota(ctx context.Context, id string) (usage QuotaUsage, err
 				usage.Total = num(data["total_capacity"])
 				usage.Used = num(data["use_capacity"])
 				if _, ok := data["use_capacity"]; !ok {
+					usage.Total = 0
+				}
+			}
+		case "quarktv":
+			result, e = p.tv(ctx, a, "/user", map[string]string{"method": "member_info"})
+			if e == nil {
+				data := obj(result["data"])
+				usage.Total = num(data["capacity"])
+				usage.Used = num(data["used"])
+				if _, ok := data["used"]; !ok {
 					usage.Total = 0
 				}
 			}

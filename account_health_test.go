@@ -285,7 +285,7 @@ func TestHealthAffectedJobsFilteredBeforePaginationIncludesLegacy(t *testing.T) 
 
 func TestQuotaUnsupportedDoesNotRaiseFailureNotification(t *testing.T) {
 	f := setup(t)
-	a := Account{ID: "tv-quota", Name: "TV", Provider: "quarktv", Root: "0", Secrets: map[string]string{"access_token": "fixture", "device_id": "fixture"}}
+	a := Account{ID: "unsupported-quota", Name: "Unsupported", Provider: "unsupported", Root: "0", Secrets: map[string]string{"access_token": "fixture", "device_id": "fixture"}}
 	if err := f.s.saveAccount(a); err != nil {
 		t.Fatal(err)
 	}
