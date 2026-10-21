@@ -1,10 +1,12 @@
-# Encrypted backup/restore — design under review
+# Encrypted backup/restore — implementation and verification contract
 
-Status: partial local primitives; no HTTP routes, UI, activation or production
-restore yet. Current baseline `532e5e4`; uncommitted `backup_archive.go`,
-`backup_snapshot.go`, `backup_test.go`, `backup_drill_test.go`, startup guards
-and Go dependency changes. Do not interpret
-these unit tests as a completed restore drill or release approval.
+Status 2026-10-21: manual encrypted export/import, isolated validation, restart
+activation, retained rollback, startup lock/hold and settings UI are implemented
+on codex/reliability-suite. Published 0.12.0 does not include this work. Independent
+gpt-6-astra/high design/implementation reviews and focused tests exist; final
+persistent recovery, ENOSPC, frozen-candidate and deployment gates remain. See
+backup-temp-ownership.md and restore-activation-design.md for the current
+filesystem protocol, and backup-restore.md for operator instructions.
 
 ## Format and snapshot
 
@@ -15,7 +17,8 @@ these unit tests as a completed restore drill or release approval.
   version, SQLite schema, created time and ordered name/size/SHA256 entries.
   Content hashes are inside the authenticated envelope. Full age EOF must be
   consumed after tar EOF, rejecting truncation/tamper/trailing plaintext.
-- Current limits:100,000 files,2GiB per file,4GiB total payload,32MiB manifest;
+- Current limits:100,000 files and100,000 distinct parent directories,2GiB per
+  file,4GiB total payload,32MiB manifest;
   ciphertext additionally bounded. UI must state limits and required temporary
   disk space. No compression avoids decompression bombs, not all resource risks.
 - SQLite `VACUUM INTO` provides consistent snapshot; auth read lock protects the
@@ -49,14 +52,14 @@ these unit tests as a completed restore drill or release approval.
   is loaded by openStore and immutable for that process lifetime. Under that hold,
   startup never requeues jobs and Engine starts no background workers. Enqueue,
   direct run/ingest/delivery and event requests are also rejected/suppressed.
-  Explicit administrator review/diagnostic permissions and acknowledgement plus
-  controlled restart remain to be implemented.
+  Explicit administrator review/diagnostic permissions, acknowledgement and
+  controlled restart are implemented; the immutable hold lasts until restart.
 - Drill must load the staged data in an isolated no-network process, prove stable
   signing/credentials/admin login and no automatic job/notification replay, verify
   preservation of original files, and test wrong password, corrupt/truncated archive,
   path attacks, future schema, failed migration, disk errors, interrupted activation.
 
-## Planned activation (not implemented)
+## Restart activation and rollback
 
 The active data directory may be a Docker mount point, so do not rename that
 directory itself. Stage inside /data and activate only on a controlled restart,
@@ -78,15 +81,21 @@ Rollback must be executable without successful login/new DB open, restore the
 previous DB/key/config set together, and leave an audit summary without secrets.
 Production deployment must prepare its separate verified backup/rollback too.
 
-## Known remaining hardening before activation
+## Final verification gates
 
 - Snapshot copying already enforces file/aggregate limits and cancellation;
   further race/permission/disk-failure evidence remains required.
 - Fresh staging/snapshot cleanup now reports failures and retains the orphan path
   for administrator cleanup. No silent successful cleanup is claimed on failure.
-- Add application-level exclusion/rate limits and safe snapshot/staging cleanup.
-- License inventory for new dependencies and dependency-upgrade regressions.
-- Add all API/UI lifecycle, restore activation/journal and fault-drill tests.
+- Operation exclusion, rate limits, bounded external ownership and startup
+  cleanup are implemented. Legacy deep candidates remain collectable; fresh
+  archive/snapshot admission bounds distinct parents before creating them.
+- Historical journals share a65-node admission/reading limit. A full chain
+  rejects the next confirmation before publishing pending or changing history.
+- Review current license inventory and frozen-candidate dependency regression.
+- Complete exact-source Linux persistent activation/rollback faults, bounded
+  tmpfs ENOSPC, UI lifecycle and deployment acceptance; focused unit results
+  alone do not release this feature.
 
 ## Current local verification
 

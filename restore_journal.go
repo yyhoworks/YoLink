@@ -634,6 +634,11 @@ func (m *restoreManager) armCandidate(ctx context.Context, id, revision string, 
 	if used[id] {
 		return errors.New("该恢复会话已使用，请重新上传")
 	}
+	// Admission must leave room for the new active node. Otherwise a valid
+	// confirmation can create a history that startup and cancellation refuse.
+	if len(used) >= restoreHistoryLimit {
+		return errors.New("恢复保留会话已达上限，未启用新候选；请先保留并整理历史恢复资料")
+	}
 	p := restoreJournal{Format: 1, Schema: currentSchemaVersion, Runtime: restoreRuntime{id, "pending", randomID()}, Created: time.Now().Unix(), New: in}
 	if prior != nil {
 		if !restoreTerminal(prior.Runtime.State) || prior.Runtime.ID == id {

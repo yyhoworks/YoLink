@@ -15,7 +15,13 @@ const (
 	backupWorkName        = ".backup-work"
 	temporaryClaimMax     = 1024
 	temporaryControlLimit = 1000
-	temporaryTreeLimit    = backupMaxFiles*8 + 128
+	// Legacy archives admitted at most 100k paths of at most4096 bytes each,
+	// but did not count their distinct parents. Include that finite worst case
+	// so interrupted older staging can still be collected. New admission limits
+	// aggregate parents to backupMaxDirs; no huge allocation follows this budget.
+	temporaryTreeLimit    = (backupMaxFiles+1)*(backupMaxPathBytes/2+2) + 128
+	temporaryDepthLimit   = backupMaxPathBytes/2 + 8 // shortest component is "d/"; allow control/stage wrappers
+	temporaryPendingLimit = backupMaxFiles*4 + 128
 )
 
 // Claims live OUTSIDE the tree they authorize. Callers hold the data-directory
@@ -260,19 +266,30 @@ func (o temporaryFiles) entries(name string, limit int) ([]os.DirEntry, error) {
 
 // Every leaf is checked, including nested device/mount boundaries. Validate the
 // entire bounded tree before starting deletion; revalidate during deletion too.
-func (o temporaryFiles) walk(name string, depth int, budget *int, remove bool) error {
-	if depth > 64 {
+type temporaryWalkBudget struct {
+	remaining int
+	pending   int
+}
+
+func (o temporaryFiles) walk(name string, depth int, budget *temporaryWalkBudget, remove bool) error {
+	if depth > temporaryDepthLimit {
 		return errors.New("临时目录嵌套过深，已保留")
 	}
-	*budget--
-	if *budget < 0 {
+	budget.remaining--
+	if budget.remaining < 0 {
 		return errors.New("临时资料数量超限，已保留")
 	}
 	info, err := o.root.Lstat(name)
 	if err != nil {
 		return err
 	}
-	if err = temporaryCheckPath(o.root, name, info.IsDir()); err != nil {
+	// Ancestors were checked before descending under the exclusive process/op
+	// locks. Check each new leaf/device once instead of rewalking every ancestor
+	// for every node (quadratic on deep legal paths).
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() && !info.Mode().IsRegular() {
+		return errors.New("临时资料包含链接或非普通文件，已保留")
+	}
+	if err = temporarySameDevice(o.root, name); err != nil {
 		return err
 	}
 	if info.IsDir() {
@@ -280,6 +297,11 @@ func (o temporaryFiles) walk(name string, depth int, budget *int, remove bool) e
 		if err != nil {
 			return err
 		}
+		// Bound both incremental allocation and the outstanding DFS frontier. A
+		// legacy tree from N accepted files has at most N pending branches, even
+		// when its total number of intermediate directories is much larger.
+		var children []string
+		defer func() { budget.pending -= len(children) }()
 		err = func() error {
 			for {
 				entries, e := f.ReadDir(128)
@@ -287,9 +309,11 @@ func (o temporaryFiles) walk(name string, depth int, budget *int, remove bool) e
 					return e
 				}
 				for _, entry := range entries {
-					if err := o.walk(path.Join(name, entry.Name()), depth+1, budget, remove); err != nil {
-						return err
+					if budget.pending >= temporaryPendingLimit {
+						return errors.New("临时目录待检查项目过多，已保留")
 					}
+					budget.pending++
+					children = append(children, entry.Name())
 				}
 				if e == io.EOF {
 					return nil
@@ -302,6 +326,13 @@ func (o temporaryFiles) walk(name string, depth int, budget *int, remove bool) e
 		}
 		if closed != nil {
 			return closed
+		}
+		// No ancestor directory handle is held during recursion. This supports
+		// deep legacy candidates even under a small process file-descriptor limit.
+		for _, child := range children {
+			if err = o.walk(path.Join(name, child), depth+1, budget, remove); err != nil {
+				return err
+			}
 		}
 	}
 	if remove {
@@ -322,11 +353,14 @@ func (o temporaryFiles) removeTree(name string) error {
 	} else if err != nil {
 		return err
 	}
-	budget := temporaryTreeLimit
+	if err := temporaryCheckPath(o.root, name, true); err != nil {
+		return err
+	}
+	budget := temporaryWalkBudget{remaining: temporaryTreeLimit}
 	if err := o.walk(name, 0, &budget, false); err != nil {
 		return err
 	}
-	budget = temporaryTreeLimit
+	budget = temporaryWalkBudget{remaining: temporaryTreeLimit}
 	return o.walk(name, 0, &budget, true)
 }
 

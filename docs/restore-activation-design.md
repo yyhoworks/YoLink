@@ -4,7 +4,9 @@ Status2026-10-21: revised design accepted by explicitly assigned Astra/high.
 Activation journal, file operations, rollback/review and HTTP integration are
 implemented in the development branch but NOT release-approved. Scoped core
 corrections were reviewed; expanded upload/GC/HTTP changes still have unresolved
-cleanup findings and missing final fault evidence. UI is not implemented.
+final fault evidence. Ownership cleanup corrections have focused Astra
+verification; settings UI and candidate summaries are implemented with focused
+browser tests. The final candidate and deployment are not yet approved.
 Phase-one reliability release is isolated in a separate checkout; no unfinished
 restore code is included. Resume this work without discarding its implementation.
 

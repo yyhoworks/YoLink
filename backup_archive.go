@@ -23,6 +23,8 @@ import (
 const (
 	backupFormatVersion = 1
 	backupMaxFiles      = 100000
+	backupMaxDirs       = 100000
+	backupMaxPathBytes  = 4096
 	backupMaxFileBytes  = int64(2 << 30)
 	backupMaxTotalBytes = int64(4 << 30)
 	backupMaxManifest   = int64(32 << 20)
@@ -46,7 +48,7 @@ type backupManifest struct {
 // Only application data is restorable. No compose/env files, output media,
 // absolute paths, symbolic links or executable scripts are accepted.
 func backupNameAllowed(name string) bool {
-	if name == "" || len(name) > 4096 || !utf8.ValidString(name) || path.Clean(name) != name || strings.ContainsAny(name, "\\:\x00") || strings.HasPrefix(name, "/") {
+	if name == "" || len(name) > backupMaxPathBytes || !utf8.ValidString(name) || path.Clean(name) != name || strings.ContainsAny(name, "\\:\x00") || strings.HasPrefix(name, "/") {
 		return false
 	}
 	for _, part := range strings.Split(name, "/") {
@@ -74,6 +76,25 @@ func backupNameAllowed(name string) bool {
 		return (ext == ".json" || ext == ".progress") && validID(strings.TrimSuffix(parts[1], ext))
 	}
 	return len(parts) >= 3 && parts[0] == "strm-backups" && validID(parts[1]) && strings.HasSuffix(name, ".strm")
+}
+
+// Reserve every distinct parent BEFORE MkdirAll creates any of them. File count
+// alone does not bound directories: each allowed path can introduce many parents.
+// The restore inventory has the same directory bound. Existing deep paths remain
+// supported; this limit is on the aggregate number of directories, not depth.
+type backupParents map[string]bool
+
+func (parents backupParents) admit(name string) error {
+	for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
+		if parents[dir] {
+			continue
+		}
+		if len(parents) >= backupMaxDirs {
+			return errors.New("备份父目录数量超过限制")
+		}
+		parents[dir] = true
+	}
+	return nil
 }
 
 type backupContextReader struct {
@@ -111,6 +132,7 @@ func validateBackupManifest(m backupManifest) error {
 		return errors.New("备份版本不受支持或清单无效")
 	}
 	seen := make(map[string]bool)
+	parents := backupParents{}
 	var total int64
 	for _, f := range m.Files {
 		key := strings.ToLower(f.Name)
@@ -118,6 +140,9 @@ func validateBackupManifest(m backupManifest) error {
 			return errors.New("备份清单包含不安全路径、重复文件或无效摘要")
 		}
 		seen[key] = true
+		if err := parents.admit(f.Name); err != nil {
+			return err
+		}
 		total += f.Size
 		if total > backupMaxTotalBytes {
 			return errors.New("备份解包大小超过限制")

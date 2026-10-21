@@ -15,6 +15,7 @@ export function fixtureAPI(path) {
     trend: Array.from({ length: 7 }, (_, i) => ({ day: `2026-10-${13 + i}`, created: 0, requests: 0, covered: true })),
   };
   if (path === '/api/notifications') return { items: [] };
+  if (path === '/api/restore/status') return { supported: true, restricted: false, runtime: {}, pending: null, upload: null };
   if (path === '/api/records') return {
     items: [{ id: 'fixture-record', kind: 'generation', event: 'strm', outcome: 'created',
       name: '<Fixture & movie>.mkv', media: 'fixture-media', time: now, path: '/synthetic/movie.mkv', output: '', note: 'Synthetic smoke record' }],

@@ -75,6 +75,7 @@ func (s *Server) backupSnapshot(ctx context.Context, parent, adminPassword strin
 		return dir, errors.New("数据库快照超过大小限制")
 	}
 	total, files := dbInfo.Size(), 2 // database and materialized admin verifier
+	parents := backupParents{}
 	copyFile := func(name string) error {
 		if ctx.Err() != nil {
 			return errors.New("备份已取消")
@@ -90,6 +91,9 @@ func (s *Server) backupSnapshot(ctx context.Context, parent, adminPassword strin
 		files++
 		if total > backupMaxTotalBytes-4096 || files > backupMaxFiles {
 			return errors.New("备份快照总量或文件数量超过限制")
+		}
+		if er = parents.admit(name); er != nil {
+			return er
 		}
 		in, er := source.Open(name)
 		if er != nil {

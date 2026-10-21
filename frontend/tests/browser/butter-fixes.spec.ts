@@ -9,7 +9,8 @@ test('running clock advances with unchanged API data without replacing dashboard
  const job=makeJob('running',now/1000-60);
  await page.route(url=>url.pathname==='/api/dashboard',route=>route.fulfill({json:{...data,time:now,jobs:[job],overview:{...data.overview,running:1}}}));
  await page.route(url=>url.pathname==='/api/state',route=>route.fulfill({json:{...state,jobs:[job]}}));
- await page.clock.install({time:now});
+ await page.clock.install({time:now-1000});
+ await page.clock.pauseAt(now);
  await page.goto('/');
  const clock=page.locator('#bw-task-elapsed');
  await expect(clock).toHaveText('01:00');

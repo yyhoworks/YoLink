@@ -361,7 +361,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "入库记录读取失败")
 		return
 	}
-	jsonOut(w, 200, object{"rule_latest": s.s.latestRules(), "version": appVersion, "accounts": accounts, "account_reports": reports, "playback": s.playbackState(), "ingest": ingest, "rules": rules, "jobs": jobs, "media": media, "overview": overview, "failures": failures, "settings": object{"public_base": s.s.setting("public_base", ""), "output_root": s.engine.outputMounts[0].Path, "output_mounts": s.engine.outputMounts}, "event_token": s.eventToken})
+	jsonOut(w, 200, object{"restore_restricted": s.s.restoreRestricted, "rule_latest": s.s.latestRules(), "version": appVersion, "accounts": accounts, "account_reports": reports, "playback": s.playbackState(), "ingest": ingest, "rules": rules, "jobs": jobs, "media": media, "overview": overview, "failures": failures, "settings": object{"public_base": s.s.setting("public_base", ""), "output_root": s.engine.outputMounts[0].Path, "output_mounts": s.engine.outputMounts}, "event_token": s.eventToken})
 }
 func (s *Server) saveAccount(w http.ResponseWriter, r *http.Request) {
 	var a Account

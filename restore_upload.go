@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const restoreHistoryLimit = 65
+
 type restoreUpload struct {
 	ID       string `json:"id"`
 	Revision string `json:"revision"`
@@ -65,7 +67,11 @@ func (m *restoreManager) uploadSlotAvailable() error {
 	if upload == nil {
 		return nil
 	}
-	if p != nil && p.Runtime.ID == upload.ID {
+	protected, err := m.protectedHistory(p)
+	if err != nil {
+		return err
+	}
+	if protected[upload.ID] {
 		return m.forgetUpload(upload.ID)
 	}
 	return errors.New("已有待确认的恢复候选，请先确认或移除")
@@ -244,7 +250,7 @@ func (m *restoreManager) cleanupUnarmed() error {
 func (m *restoreManager) protectedHistory(p *restoreJournal) (map[string]bool, error) {
 	protected := map[string]bool{}
 	for depth := 0; p != nil; depth++ {
-		if depth > 64 {
+		if depth >= restoreHistoryLimit {
 			return nil, errors.New("恢复保留会话过多，请先整理历史恢复资料")
 		}
 		if protected[p.Runtime.ID] {

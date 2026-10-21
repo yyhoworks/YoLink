@@ -60,6 +60,36 @@ func TestBackupOwnershipNeverAdoptsPreexistingTargetOrClaim(t *testing.T) {
 	}
 }
 
+func TestBackupOwnershipBudgetIncludesLiveAncestorLists(t *testing.T) {
+	o := temporaryFixture(t)
+	target, err := o.create("export", strings.Repeat("f", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"first", "second"} {
+		if err = o.root.Mkdir(target+"/"+dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"a", "b"} {
+			if err = o.root.WriteFile(target+"/"+dir+"/"+name, []byte("preserve"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Model other live ancestor allocations without creating 400k files. This
+	// frame's two names + its first child's two names exceed the three free slots.
+	budget := temporaryWalkBudget{remaining: 100, pending: temporaryPendingLimit - 3}
+	if err = o.walk(target, 0, &budget, false); err == nil {
+		t.Fatal("freed budget for still-live ancestor lists")
+	}
+	if budget.pending != temporaryPendingLimit-3 {
+		t.Fatal("failed traversal leaked its allocation budget", budget.pending)
+	}
+	if err = o.cleanup("export", strings.Repeat("f", 32)); err != nil {
+		t.Fatal("ordinary safe cleanup failed", err)
+	}
+}
+
 func TestBackupOwnershipPublicationFailureCreatesNoPlaintext(t *testing.T) {
 	for _, point := range []string{"ownership.claim.before_write", "ownership.claim.before_sync", "ownership.claim.before_publish", "ownership.claim.after_publish", "ownership.claim.durable", "ownership.target.before_mkdir"} {
 		t.Run(point, func(t *testing.T) {

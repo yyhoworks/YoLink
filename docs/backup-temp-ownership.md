@@ -1,20 +1,19 @@
 # Backup/restore temporary-data ownership corrections
 
-## Paused checkpoint — NOT approved for release
+## Resumed checkpoint — final verification pending
 
-User requested completion of 0.12.0 acceptance followed by pausing all later
-work. Current implementation/tests are preserved locally, NOT in published
-0.12.0. Astra/high implementation review found one unresolved P1: cleanup's
-depth64/node800128 budgets are smaller than trees accepted by snapshot/archive
-creation. A valid65-component recovery path can leave owned plaintext that
-blocks startup. Do not publish this backup work before fixing admission/cleanup
-budget compatibility, including existing deep candidates, and verifying it.
+User resumed after 0.12.0 acceptance. This implementation remains local, outside
+published0.12.0. Astra's depth64/node800128 P1 is corrected: new admission bounds
+distinct parents before materialization; cleanup admits the finite legacy
+file/path worst case, bounds its live traversal frontier and closes directory
+handles before descending. Existing deep candidates remain supported. A further
+live-ancestor-list memory-budget P2 was corrected and independently verified.
 
-Resume-only work: deep export/cancel/partial-stage regression; ambiguous
-upload.after_rename/sync publication protection; extra multipart-part cleanup
-failure/retry; upload-unlink parent-sync failure. Reuse the existing Astra review
-context for correction verification. No fixes to these findings were implemented
-after the user's pause direction.
+Deep export/cancel/interrupted-stage, low-FD legacy cleanup, ambiguous upload
+publication, extra multipart rejection cleanup and upload-unlink parent-sync
+failure regressions are implemented. Current full persistent Linux matrix and
+bounded-tmpfs ENOSPC results, final-source review and deployment are still gates.
+Do not treat old interrupted or timed-out runs as passes.
 
 Existing evidence: Windows targeted cleanup/kill/concurrency suites passed;
 Linux network-none private persistent focused cleanup/HTTP/replay suites passed

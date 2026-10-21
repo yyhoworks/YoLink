@@ -166,6 +166,7 @@ function showLogin() {
   clearTimeout(refreshLifecycle.timer);
   if (typeof consoleLeave === "function") consoleLeave();
   if (typeof reliabilityLeave === "function") reliabilityLeave();
+  if (typeof backupLeave === "function") backupLeave();
   recordsLeave();
   if (typeof closeSettingsDrawer === "function" && ((_a = $("settings-drawer")) == null ? void 0 : _a.open)) closeSettingsDrawer();
   $("login").hidden = false;
@@ -194,6 +195,7 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   const previousView = view;
   view = next;
   $("global-error").hidden = true;
+  if (typeof backupLeave === "function" && next !== "settings") backupLeave();
   if (previousView !== next && typeof consoleLeave === "function") consoleLeave();
   document.querySelectorAll(".view").forEach((el) => el.hidden = el.id !== "view-" + next);
   document.querySelectorAll(".sidebar [data-nav]").forEach((el) => {
@@ -287,6 +289,7 @@ const accountBy = (id) => state.accounts.find((a) => a.id === id);
 const ruleBy = (id) => state.rules.find((r) => r.id === id);
 const date = (t) => new Date(t * 1e3).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 function render() {
+  if (typeof backupRender === "function") backupRender();
   preserveControlFocus(() => {
     var _a, _b;
     if (view === "home") {

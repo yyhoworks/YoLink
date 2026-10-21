@@ -25,7 +25,7 @@ const icons=()=>{
 const toast=message=>{$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4500)};
 async function api(path,body,options={}){return requestAPI(path,body,options)}
 async function action(button,fn){button.disabled=true;button.setAttribute('aria-busy','true');try{await fn()}catch(e){toast(e.message);$('global-error').textContent=e.message;$('global-error').hidden=false}finally{button.disabled=false;button.removeAttribute('aria-busy');if(!$('app').hidden&&view==='home')preserveControlFocus(renderGeneration);if(typeof updateOutputSelection==='function'&&view==='inventory')updateOutputSelection();if(!button.isConnected) return;icons()}}
-function showLogin(){refreshLifecycle.initialized=true;refreshLifecycle.epoch++;refreshLifecycle.scope.cancel('state');clearTimeout(refreshLifecycle.timer);if(typeof consoleLeave==='function')consoleLeave();if(typeof reliabilityLeave==='function')reliabilityLeave();recordsLeave();if(typeof closeSettingsDrawer==='function'&&$('settings-drawer')?.open)closeSettingsDrawer();$('login').hidden=false;$('app').hidden=true}
+function showLogin(){refreshLifecycle.initialized=true;refreshLifecycle.epoch++;refreshLifecycle.scope.cancel('state');clearTimeout(refreshLifecycle.timer);if(typeof consoleLeave==='function')consoleLeave();if(typeof reliabilityLeave==='function')reliabilityLeave();if(typeof backupLeave==='function')backupLeave();recordsLeave();if(typeof closeSettingsDrawer==='function'&&$('settings-drawer')?.open)closeSettingsDrawer();$('login').hidden=false;$('app').hidden=true}
 function showApp(){$('login').hidden=true;$('app').hidden=false}
 function nav(next,loadFiles=true,context={},options={}){
  if(next==='playback'){next='records';recordsKind='tools'}
@@ -36,6 +36,7 @@ function nav(next,loadFiles=true,context={},options={}){
  if(['config','directories','tasks'].includes(next))next='home';
  if(typeof reliabilityLeave==='function'&&view!==next)reliabilityLeave(next);
  const previousView=view;view=next;$('global-error').hidden=true;
+ if(typeof backupLeave==='function'&&next!=='settings')backupLeave();
  if(previousView!==next&&typeof consoleLeave==='function')consoleLeave();
  document.querySelectorAll('.view').forEach(el=>el.hidden=el.id!=='view-'+next);
  document.querySelectorAll('.sidebar [data-nav]').forEach(el=>{const selected=el.dataset.nav===next,parent=el.dataset.nav==='more'&&['files','inventory','records','notifications','maintenance','settings'].includes(next);el.classList.toggle('active',selected||parent);if(selected)el.setAttribute('aria-current','page');else if(parent)el.setAttribute('aria-current','true');else el.removeAttribute('aria-current')});
@@ -90,6 +91,7 @@ const accountBy=id=>state.accounts.find(a=>a.id===id);
 const ruleBy=id=>state.rules.find(r=>r.id===id);
 const date=t=>new Date(t*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 function render(){
+ if(typeof backupRender==='function')backupRender();
  preserveControlFocus(()=>{
   if(view==='home'){renderGeneration();renderIngestHistory();}
   if(view==='accounts'||view==='files')renderCloudManagement();

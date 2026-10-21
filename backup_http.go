@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 )
@@ -192,6 +193,7 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer m.Close()
+	m.fault = s.backupFault
 	if err = m.uploadSlotAvailable(); err != nil {
 		fail(w, 409, err.Error())
 		return
@@ -226,6 +228,10 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) restoreStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.startBackupOperation(w) {
+		return
+	}
+	defer s.backupMu.Unlock()
 	m, err := openRestoreManager(s.s.dir)
 	if err != nil {
 		fail(w, 500, "恢复状态无法读取")
@@ -237,7 +243,7 @@ func (s *Server) restoreStatus(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "恢复日志损坏，请保留资料并使用管理员回退流程")
 		return
 	}
-	status := object{"supported": restorePlatformSupported(), "restricted": s.s.restoreRestricted, "runtime": s.s.startupRestore, "pending": nil, "limits": object{"files": backupMaxFiles, "file_bytes": backupMaxFileBytes, "payload_bytes": backupMaxTotalBytes, "passphrase_min_bytes": 12}}
+	status := object{"supported": restorePlatformSupported(), "restricted": s.s.restoreRestricted, "runtime": s.s.startupRestore, "pending": nil, "limits": object{"files": backupMaxFiles, "directories": backupMaxDirs, "file_bytes": backupMaxFileBytes, "payload_bytes": backupMaxTotalBytes, "passphrase_min_bytes": 12}}
 	if p != nil {
 		status["pending"] = object{"id": p.Runtime.ID, "state": p.Runtime.State, "generation": p.Runtime.Generation, "created": p.Created}
 	}
@@ -246,7 +252,30 @@ func (s *Server) restoreStatus(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "恢复候选状态无法读取")
 		return
 	}
-	status["upload"] = upload
+	status["upload"] = nil
+	if upload != nil {
+		protected, protectionErr := m.protectedHistory(p)
+		if protectionErr != nil {
+			fail(w, 500, "恢复历史无法核对，已保留资料")
+			return
+		}
+		// Confirmation can durably arm a candidate before upload-pointer
+		// removal fails. It is already a journal session, not a new upload.
+		if protected[upload.ID] {
+			jsonOut(w, 200, status)
+			return
+		}
+		var candidate restoreCandidate
+		if _, e = m.readEnvelope(path.Join(restoreControlName, upload.ID, "candidate.json"), &candidate); e != nil || candidate.ID != upload.ID || candidate.Revision != upload.Revision || candidate.Revision != restoreRevision(candidate.Inventory) || validateRestoreInventory(candidate.Inventory, false) != nil {
+			fail(w, 500, "恢复候选摘要无法核对，已保留资料")
+			return
+		}
+		var payload int64
+		for _, f := range candidate.Inventory.Files {
+			payload += f.Size
+		}
+		status["upload"] = object{"id": upload.ID, "revision": upload.Revision, "created": candidate.Created, "validation": candidate.Validation, "payload_bytes": payload, "files": len(candidate.Inventory.Files)}
+	}
 	jsonOut(w, 200, status)
 }
 
