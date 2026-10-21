@@ -12,16 +12,6 @@ import (
 	"time"
 )
 
-func strongScanFixture(t *testing.T) *fixture {
-	f := setup(t)
-	f.r.Incremental = true
-	f.c.dirs = map[string][]Entry{"root": {{ID: "first", Name: "first.mkv", Size: 12, Modified: "v1"}, {ID: "second", Name: "second.mkv", Size: 12, Modified: "v1"}}}
-	if err := f.s.saveRule(f.r); err != nil {
-		t.Fatal(err)
-	}
-	return f
-}
-
 func TestIncrementalScanVerifiesOutputsAndReportsLocalChanges(t *testing.T) {
 	f := strongScanFixture(t)
 	first := generate(t, f, false, 0)
@@ -195,7 +185,10 @@ func TestChangeRepairRevalidatesEveryBindingAndPreservesNewFiles(t *testing.T) {
 			original, _ := os.ReadFile(file)
 			os.Remove(file)
 			p, err := srv.previewChangeRepair(t.Context(), []string{key})
-			if err != nil || !p.Items[0].Ready {
+			if err != nil || len(p.Items) != 1 {
+				t.Fatal(p, err)
+			}
+			if !p.Items[0].Ready {
 				t.Fatal(p, err)
 			}
 			switch mutation {

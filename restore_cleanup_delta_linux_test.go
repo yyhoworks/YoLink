@@ -25,8 +25,11 @@ import (
 func TestRestoreStatusAndNewUploadIgnoreConsumedPointers(t *testing.T) {
 	f := restoreRawFixture(t, false)
 	live := setup(t)
-	s, handler, cookie := testToolsServer(t, live, live.c)
-	s.s.dir = f.dir // Status needs only the fixture journal, not its synthetic DB.
+	// Status needs only the fixture journal, not its synthetic DB: bind the
+	// Server to a shell Store carrying the restore fixture's data directory
+	// (via testServerWithStore) instead of mutating the live fixture's Store
+	// after construction.
+	_, handler, cookie := testServerWithStore(t, &Store{dir: f.dir}, live, live.c)
 	for _, state := range []string{"pending", "installed", "released_new"} {
 		t.Run(state, func(t *testing.T) {
 			p, err := f.m.loadJournal()

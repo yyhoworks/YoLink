@@ -8,15 +8,6 @@ import (
 	"time"
 )
 
-func scanHistoryFixture(t *testing.T) *fixture {
-	t.Helper()
-	f := setup(t)
-	f.r.Incremental = true
-	if err := f.s.saveRule(f.r); err != nil {
-		t.Fatal(err)
-	}
-	return f
-}
 func scanHistoryStart(t *testing.T, f *fixture, n int, scope string) *scanSession {
 	t.Helper()
 	if scope == "" {

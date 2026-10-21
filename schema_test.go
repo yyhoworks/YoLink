@@ -104,6 +104,40 @@ func TestSchemaMigrationFailureRollsBackDataAndVersion(t *testing.T) {
 	}
 }
 
+func TestRealMigrationStepFailureRollsBackOnlyThatStep(t *testing.T) {
+	db := schemaTestDB(t)
+	// Occupy a table name the genuine checkpoint step (migration 2) must
+	// create, so migrateCompactCheckpoints fails midway — after it has
+	// already created checkpoint_snapshots inside the same transaction.
+	if _, err := db.Exec("CREATE TABLE checkpoint_claims(job TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateSchema(db); err == nil {
+		t.Fatal("conflicting table did not fail the real migration chain")
+	}
+	var version, count int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 1 {
+		t.Fatal("version after failed real step", version, err)
+	}
+	// Step 1 (legacy baseline) committed and stays; step 2 left nothing.
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='accounts'").Scan(&count); err != nil || count != 1 {
+		t.Fatal("committed legacy step missing", count, err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='checkpoint_snapshots'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("failed real step left partial DDL behind", count, err)
+	}
+	// Removing the conflict lets the real chain finish from version 1.
+	if _, err := db.Exec("DROP TABLE checkpoint_claims"); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateSchema(db); err != nil {
+		t.Fatal("retry after removing conflict failed", err)
+	}
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != currentSchemaVersion {
+		t.Fatal("version after retry", version, err)
+	}
+}
+
 func TestStoreRejectsFutureSchemaBeforeCreatingKeysOrChangingDatabase(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "strmlink.db")

@@ -172,10 +172,10 @@ func TestBackupArchiveRejectsUnsafePathsManifestsAndEntries(t *testing.T) {
 		func(v *backupManifest) { v.Files[1].Size = 31 },
 		func(v *backupManifest) { v.Files = v.Files[:3] },
 	} {
-		copy := m
-		copy.Files = append([]backupFile(nil), m.Files...)
-		mutate(&copy)
-		if validateBackupManifest(copy) == nil {
+		dup := m
+		dup.Files = append([]backupFile(nil), m.Files...)
+		mutate(&dup)
+		if validateBackupManifest(dup) == nil {
 			t.Fatal("invalid manifest accepted")
 		}
 	}

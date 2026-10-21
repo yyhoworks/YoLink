@@ -94,16 +94,16 @@ func TestPartialHistoryExposesLocalIssuesWithoutAbsenceAuthority(t *testing.T) {
 func TestScanHistoryChangedOverlappingPointerRejectsPublication(t *testing.T) {
 	f := scanHistoryFixture(t)
 	first := scanHistoryStart(t, f, 1, "")
-	first.recordListing(t.Context(), ScanDir{ID: "root", Source: "/media"}, nil)
+	mustSucceed(t, first.recordListing(t.Context(), ScanDir{ID: "root", Source: "/media"}, nil))
 	scanHistoryDone(t, first, "root")
 	if err := first.publish(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	root := scanHistoryStart(t, f, 2, "")
-	root.recordListing(t.Context(), ScanDir{ID: "root", Source: "/media"}, nil)
+	mustSucceed(t, root.recordListing(t.Context(), ScanDir{ID: "root", Source: "/media"}, nil))
 	scanHistoryDone(t, root, "root")
 	sub := scanHistoryStart(t, f, 3, "/media/新增")
-	sub.recordListing(t.Context(), ScanDir{ID: "root", Source: "/media/新增"}, nil)
+	mustSucceed(t, sub.recordListing(t.Context(), ScanDir{ID: "root", Source: "/media/新增"}, nil))
 	scanHistoryDone(t, sub, "root")
 	if err := sub.publish(t.Context()); err != nil {
 		t.Fatal(err)
@@ -225,7 +225,10 @@ func TestRepairPreviewRespectsCurrentMediaFilter(t *testing.T) {
 	_, _, key, _ := f.e.outputLocation("test/media/first.strm")
 	os.Remove(filepath.Join(f.output, "test/media/first.strm"))
 	p, err := s.previewChangeRepair(t.Context(), []string{key})
-	if err != nil || p.Items[0].Ready || !strings.Contains(p.Items[0].Note, "排除") {
+	if err != nil || len(p.Items) != 1 {
+		t.Fatal(p, err)
+	}
+	if p.Items[0].Ready || !strings.Contains(p.Items[0].Note, "排除") {
 		t.Fatal(p, err)
 	}
 }

@@ -135,6 +135,11 @@ func TestBackupIsolatedStartupHelper(t *testing.T) {
 		t.Fatal("event gate missing", w.Code)
 	}
 	// Exercise notification/ingest timer periods if a worker starts by mistake.
+	// NOTE: this is a best-effort smoke wait, not a proof — the engine exposes
+	// no tick/startup signal a test could wait on, so the test simply outlives
+	// one full timer period (2s) and then asserts no worker did anything. A
+	// worker that started late would not be caught; the assertions below on
+	// jobs, outputs and credentials are the substantive checks.
 	timer := time.NewTimer(2200 * time.Millisecond)
 	defer timer.Stop()
 	<-timer.C

@@ -142,10 +142,10 @@ type telegramTestTransport func(*http.Request) (*http.Response, error)
 
 func (fn telegramTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
 func TestTelegramNotificationOnlySendsMessagesAndSanitizesErrors(t *testing.T) {
-	original := telegramHTTPClient
-	t.Cleanup(func() { telegramHTTPClient = original })
+	f := setup(t)
+	t.Cleanup(func() { setTelegramClient(f.s, nil) })
 	count := 0
-	telegramHTTPClient = &http.Client{Transport: telegramTestTransport(func(r *http.Request) (*http.Response, error) {
+	setTelegramClient(f.s, &http.Client{Transport: telegramTestTransport(func(r *http.Request) (*http.Response, error) {
 		count++
 		if r.URL.Host != "api.telegram.org" || r.URL.Scheme != "https" || !strings.HasSuffix(r.URL.Path, "/sendMessage") {
 			t.Fatal("telegram used unexpected endpoint")
@@ -156,8 +156,7 @@ func TestTelegramNotificationOnlySendsMessagesAndSanitizesErrors(t *testing.T) {
 			t.Fatal("telegram payload invalid")
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Header: http.Header{}}, nil
-	})}
-	f := setup(t)
+	})})
 	_, h, cookie := testToolsServer(t, f, f.c)
 	w := channelPOST(t, f.s, h, cookie, object{"name": "我的 Telegram", "type": "telegram", "enabled": true, "events": []string{"success"}, "bot_token": "123:fixture_token", "chat_id": "-100123"})
 	if w.Code != 200 {
@@ -168,9 +167,9 @@ func TestTelegramNotificationOnlySendsMessagesAndSanitizesErrors(t *testing.T) {
 	if w.Code != 200 || count != 1 {
 		t.Fatal(w.Code, w.Body, count)
 	}
-	telegramHTTPClient = &http.Client{Transport: telegramTestTransport(func(r *http.Request) (*http.Response, error) {
+	setTelegramClient(f.s, &http.Client{Transport: telegramTestTransport(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":401,"description":"fixture_token must not leak"}`)), Header: http.Header{}}, nil
-	})}
+	})})
 	w = generationPOST(h, cookie, "/api/notification-channels/"+items[0].ID+"/test", object{})
 	if w.Code != 400 || strings.Contains(w.Body.String(), "fixture_token") {
 		t.Fatal("telegram token exposed or failure accepted", w.Body)

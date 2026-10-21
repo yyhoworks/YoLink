@@ -230,6 +230,46 @@ func TestActivityRetentionAndLogFailureDoesNotBreak302(t *testing.T) {
 	}
 }
 
+func TestActivityAppendWithExhaustedBudgetSignalsFailure(t *testing.T) {
+	f := setup(t)
+	// The production online path appends with a 250ms best-effort budget.
+	// With an already-expired budget the append must not insert a row, and
+	// the failure must be observable through activityError (surfaced to the
+	// UI as write_error) instead of silently blocking or dropping the event.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.s.appendActivityContext(ctx, Activity{Kind: "direct", Outcome: "resolved", Name: "budget-starved"})
+	var count int
+	if err := f.s.db.QueryRow("SELECT COUNT(*) FROM activity_events WHERE kind='direct'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("budget-starved append inserted a row", count)
+	}
+	f.s.activityMu.Lock()
+	signalled := f.s.activityError != ""
+	f.s.activityMu.Unlock()
+	if !signalled {
+		t.Fatal("budget-starved append left no observable signal")
+	}
+	// A healthy append afterwards still succeeds and clears the signal.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	f.s.appendActivityContext(ctx2, Activity{Kind: "direct", Outcome: "resolved", Name: "healthy"})
+	if err := f.s.db.QueryRow("SELECT COUNT(*) FROM activity_events WHERE kind='direct'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("healthy append missing after budget failure", count)
+	}
+	f.s.activityMu.Lock()
+	cleared := f.s.activityError == ""
+	f.s.activityMu.Unlock()
+	if !cleared {
+		t.Fatal("healthy append did not clear the failure signal")
+	}
+}
+
 func TestServeRecordsReview(t *testing.T) {
 	if os.Getenv("YOLINK_RECORDS_UI_REVIEW") != "1" {
 		t.Skip("local records UI fixture")
@@ -259,10 +299,5 @@ func TestServeRecordsReview(t *testing.T) {
 	f.s.appendActivity(Activity{Kind: "direct", Outcome: "readable", Event: "check", Media: mid, Name: "电影 & 测试.mkv", Account: f.a.ID, AccountName: f.a.Name, Request: "fixture-check", Host: "cdn.example.com", Bytes: 1024, Millis: 30})
 	f.s.appendActivity(Activity{Kind: "direct", Outcome: "resolved", Event: "resolve", Media: mid, Name: "电影 & 测试.mkv", Account: f.a.ID, AccountName: f.a.Name, Request: "fixture-resolve", Host: "cdn.example.com", Millis: 12})
 	f.s.appendActivity(Activity{Kind: "generation", Outcome: "failed", Event: "strm", Media: mid, Name: "电影 & 测试.mkv", Account: f.a.ID, AccountName: f.a.Name, Provider: f.a.Provider, Path: "/media/电影 & 测试.mkv", Output: "/CloudNAS/测试目录/电影 & 测试.strm", Rule: f.r.ID, RuleName: f.r.Name, Job: "fixture-conflict", Error: "测试记录：输出内容不同，保留已有文件"})
-	server := &http.Server{Addr: "127.0.0.1:18796", Handler: h, ReadHeaderTimeout: 5 * time.Second}
-	t.Cleanup(func() { server.Close() })
-	t.Log("Records UI fixture http://127.0.0.1:18796; fake accounts only")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		t.Fatal(err)
-	}
+	runReviewFixture(t, h, "records UI; fake accounts only")
 }

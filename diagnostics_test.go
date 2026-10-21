@@ -87,7 +87,10 @@ func TestDiagnosticModifiedOutputRemainsFailedAndNoOverwrite(t *testing.T) {
 	}
 	s, _, _ := testToolsServer(t, f, f.c)
 	report := s.runDiagnostic(context.Background(), m.ID, "", false)
-	if report.Steps[1].Status != "failed" || report.Steps[1].Kind != "modified" || report.Steps[3].Status != "passed" || report.Readable {
+	if output := diagnosticStep(t, report, "output"); output.Status != "failed" || output.Kind != "modified" {
+		t.Fatal(report)
+	}
+	if resolve := diagnosticStep(t, report, "resolve"); resolve.Status != "passed" || report.Readable {
 		t.Fatal(report)
 	}
 	bytes, err := os.ReadFile(file)
@@ -105,12 +108,15 @@ func TestDiagnosticRejectsUnknownOptionsAndOutputOwnership(t *testing.T) {
 		t.Fatal("arbitrary URL input accepted")
 	}
 	report := s.runDiagnostic(context.Background(), m.ID, "../../secret", true)
-	if report.Steps[1].Status != "failed" || report.Steps[3].Status != "skipped" {
+	if output := diagnosticStep(t, report, "output"); output.Status != "failed" {
+		t.Fatal("unowned path accepted", report)
+	}
+	if resolve := diagnosticStep(t, report, "resolve"); resolve.Status != "skipped" {
 		t.Fatal("unowned path accepted", report)
 	}
 	f.c.target = PlaybackTarget{URL: "http://127.0.0.1:1/private", Mode: "302"}
 	report = s.runDiagnostic(context.Background(), m.ID, "", true)
-	if report.Readable || report.Steps[4].Status != "failed" {
+	if report.Readable || diagnosticStep(t, report, "probe").Status != "failed" {
 		t.Fatal("private fetch accepted", report)
 	}
 }
