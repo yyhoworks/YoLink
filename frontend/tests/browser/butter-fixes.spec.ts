@@ -111,3 +111,57 @@ test('UI review fixes: header logout, deduplicated desktop more menu, skin panel
  await expect(page.locator('#view-maintenance')).toBeVisible();
 });
 
+test('cloud-more compact menu popover remains high-contrast in glass modes and filter bars align on a single row',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});
+ await page.goto('/#accounts');
+ const more=page.locator('.cloud-more').first();
+ await more.locator('summary').click();
+ const menu=more.locator('>div');
+ const removeBtn=menu.locator('button[data-cloud-remove]');
+ const hint=menu.locator('p');
+ await expect(menu).toBeVisible();
+ await expect(removeBtn.locator('svg')).toBeVisible();
+ await expect(hint).toHaveText('已关联规则或播放索引时请先停用，不可直接移除。');
+ const checkContrast=async(backdropRgb:[number,number,number])=>{
+  for(const target of [removeBtn,hint]){
+   const ratio=await target.evaluate((el,backdrop)=>{
+    const parse=(s:string)=>{const m=s.match(/[\d.]+/g)!.map(Number);return m.length===3?[...m,1]:m;};
+    const fg=parse(getComputedStyle(el).color),bg=parse(getComputedStyle(el.closest('.cloud-more>div')!).backgroundColor);
+    const comp=bg.slice(0,3).map((v,i)=>v*bg[3]+backdrop[i]*(1-bg[3]));
+    const lum=(rgb:number[])=>rgb.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0);
+    const [hi,lo]=[lum(fg),lum(comp)].sort((a,b)=>b-a);
+    return(hi+.05)/(lo+.05);
+   },backdropRgb);
+   expect(ratio).toBeGreaterThanOrEqual(4.5);
+  }
+ };
+ await checkContrast([255,255,255]);
+ await page.getByRole('button',{name:'皮肤管理',exact:true}).click();
+ await page.locator('[data-style-choice="glass"]').click();
+ await page.locator('[data-glass-preset="light-frost"]').click();
+ await expect(removeBtn).toHaveAttribute('data-glass-adapted','dark');
+ await checkContrast([0,0,0]);
+ await page.locator('[data-glass-preset="dark-clear"]').click();
+ await expect(removeBtn).toHaveAttribute('data-glass-adapted','light');
+ await checkContrast([255,255,255]);
+ await page.getByRole('button',{name:'关闭皮肤管理',exact:true}).click();
+
+ await page.locator('.sidebar [data-nav="records"]').click();
+ await expect(page.getByLabel('搜索文件、路径或客户端')).toHaveAttribute('placeholder','搜索文件名、输出路径、IP、PotPlayer…');
+ const recordsTops=await page.locator('#records-filter-form :is(input,select,button):visible').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().top)));
+ expect(new Set(recordsTops).size).toBe(1);
+ await page.locator('#records-deliveries-tab').click();
+ await expect(page.getByLabel('搜索投递任务、目录或错误')).toHaveAttribute('placeholder','搜索投递任务、目录或错误…');
+
+ await page.goto('/#inventory');
+ await expect(page.getByLabel('文件或路径')).toBeVisible();
+ const invTops=await page.locator('#inventory-filters :is(input,select,button):visible').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().top)));
+ expect(new Set(invTops).size).toBe(1);
+
+ await page.goto('/#config');
+ await expect(page.getByLabel('搜索目录规则')).toBeVisible();
+ const ruleTops=await page.locator('#rule-filters :is(input,select,button):visible').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().top)));
+ expect(new Set(ruleTops).size).toBe(1);
+});
+
+

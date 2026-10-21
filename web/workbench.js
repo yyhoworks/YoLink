@@ -103,6 +103,7 @@ function syncRecordSections(){
  for(const id of ['records-account','records-event','records-days'])$(id).closest('label').hidden=delivery;
  $('records-filter-form').classList.toggle('delivery-filter',delivery);
  $('records-search').closest('label').childNodes[0].textContent=delivery?'搜索投递任务、目录或错误':'搜索文件、路径或客户端';
+ $('records-search').placeholder=delivery?'搜索投递任务、目录或错误…':'搜索文件名、输出路径、IP、PotPlayer…';
  $('view-records').querySelector('.records-pagination').hidden=delivery;
  $('view-records').querySelector('.records-footer').hidden=delivery;
  if(delivery){$('records-explanation').textContent='最近 30 条持久投递结果。通知失败只重试发送，不会重新扫描或生成文件。';$('record-context').hidden=true}
