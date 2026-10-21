@@ -34,7 +34,13 @@ func TestIncrementalPerformanceEvidence(t *testing.T) {
 			f.c.dirs["root"] = files
 			c := &measuredScanCloud{Clouds: f.c}
 			f.e.clouds = c
-			if j := generate(t, f, false, 0); j.Status != "completed" {
+			initial, err := f.e.enqueue(f.r.ID, "", "", false, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This fixture uses a persistent NAS volume with 1,000 per-item
+			// durable transactions, not the five-second small-fixture budget.
+			if j := finishWithin(t, f, initial, 3*time.Minute); j.Status != "completed" {
 				t.Fatal(j)
 			}
 			for sample := 0; sample < 2; sample++ {
@@ -49,7 +55,7 @@ func TestIncrementalPerformanceEvidence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				j = finish(t, f, j)
+				j = finishWithin(t, f, j, 3*time.Minute)
 				elapsed := time.Since(started)
 				f.s.db.QueryRow("SELECT total_changes()").Scan(&after)
 				runtime.ReadMemStats(&memAfter)

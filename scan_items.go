@@ -160,16 +160,18 @@ func (e *Engine) prepareScanItem(ctx context.Context, session *scanSession, m Me
 	return item, false, tx.Commit()
 }
 
-func (e *Engine) generateScanMedia(ctx context.Context, a Account, r Rule, j *Job, d ScanDir, f Entry, source, dest string, m Media, content []byte, cp *ScanCheckpoint) error {
+// Output protection applies even when a limited scan, failed-directory retry,
+// or legacy checkpoint cannot establish a complete observation baseline.
+func (e *Engine) preserveRegisteredScanOutput(ctx context.Context, a Account, r Rule, j *Job, f Entry, source, dest string, m Media, content []byte, cp *ScanCheckpoint) (bool, error) {
 	_, _, key, err := e.outputLocation(dest)
 	if err != nil {
-		return err
+		return false, err
 	}
 	hash := contentHash(content)
 	var registeredOwner, registeredHash string
 	ownerErr := e.s.db.QueryRowContext(ctx, "SELECT media,hash FROM outputs WHERE path=?", key).Scan(&registeredOwner, &registeredHash)
 	if ownerErr != nil && !errors.Is(ownerErr, sql.ErrNoRows) {
-		return ownerErr
+		return false, ownerErr
 	}
 	if ownerErr == nil && registeredOwner == m.ID {
 		actual, readErr := e.outputHash(key)
@@ -182,11 +184,15 @@ func (e *Engine) generateScanMedia(ctx context.Context, a Account, r Rule, j *Jo
 			kind = "outdated"
 		}
 		var intents int
-		if err = e.s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM scan_items WHERE run=? AND remote=? AND state='intent'", cp.scan.Run.ID, f.ID).Scan(&intents); err != nil {
-			return err
+		if cp.scan != nil {
+			if err = e.s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM scan_items WHERE run=? AND remote=? AND state='intent'", cp.scan.Run.ID, f.ID).Scan(&intents); err != nil {
+				return false, err
+			}
 		}
 		if kind != "" && intents == 0 {
-			cp.local = &scanLocalChange{kind, key, source, m.ID, registeredHash, actual}
+			if cp.scan != nil {
+				cp.local = &scanLocalChange{kind, key, source, m.ID, registeredHash, actual}
+			}
 			j.LocalIssues++
 			outcome := "skipped"
 			if kind == "local_missing" {
@@ -201,9 +207,21 @@ func (e *Engine) generateScanMedia(ctx context.Context, a Account, r Rule, j *Jo
 			if outcome == "failed" {
 				cp.activity.Error = j.Message
 			}
-			return nil
+			return true, nil
 		}
 	}
+	return false, nil
+}
+
+func (e *Engine) generateScanMedia(ctx context.Context, a Account, r Rule, j *Job, d ScanDir, f Entry, source, dest string, m Media, content []byte, cp *ScanCheckpoint) error {
+	if preserved, err := e.preserveRegisteredScanOutput(ctx, a, r, j, f, source, dest, m, content, cp); err != nil || preserved {
+		return err
+	}
+	_, _, key, err := e.outputLocation(dest)
+	if err != nil {
+		return err
+	}
+	hash := contentHash(content)
 	unchanged, err := cp.scan.unchanged(ctx, f, source)
 	if err != nil {
 		return err

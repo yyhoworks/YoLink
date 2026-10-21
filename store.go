@@ -318,8 +318,33 @@ func (s *Store) saveRule(r Rule) error {
 	if e != nil {
 		return e
 	}
-	_, e = s.db.Exec("INSERT INTO rules VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", r.ID, string(p))
-	return e
+	tx, e := s.db.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var previous string
+	e = tx.QueryRow("SELECT payload FROM rules WHERE id=?", r.ID).Scan(&previous)
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
+		return e
+	}
+	if e == nil {
+		var old Rule
+		if e = json.Unmarshal([]byte(previous), &old); e != nil {
+			return e
+		}
+		if old.Account != r.Account || old.Folder != r.Folder || old.SourcePath != r.SourcePath || old.Output != r.Output {
+			// Revoke authority only. History and references held by active jobs
+			// or repair previews retain their normal garbage-collection rules.
+			if _, e = tx.Exec("DELETE FROM scan_baselines WHERE rule=?", r.ID); e != nil {
+				return e
+			}
+		}
+	}
+	if _, e = tx.Exec("INSERT INTO rules VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", r.ID, string(p)); e != nil {
+		return e
+	}
+	return tx.Commit()
 }
 func (s *Store) rule(id string) (Rule, error) {
 	var r Rule

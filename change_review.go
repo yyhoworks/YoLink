@@ -189,9 +189,6 @@ func (s *Server) prepareChangeRepairItemTx(tx *sql.Tx, key string) (item changeR
 	if e != nil {
 		return item, e
 	}
-	if rule.Filter.excluded(item.Media.Name, relative) || !rule.Filter.media(Entry{Name: item.Media.Name, Size: item.Media.Size}) {
-		return item, errors.New("当前规则已排除此媒体，本次仅供核对")
-	}
 	dest := path.Join(rule.Output, strings.TrimSuffix(relative, path.Ext(relative))+".strm")
 	_, _, expectedKey, e := s.engine.outputLocation(dest)
 	if e != nil || expectedKey != key {
@@ -206,16 +203,24 @@ func (s *Server) prepareChangeRepairItemTx(tx *sql.Tx, key string) (item changeR
 		return item, err
 	}
 	covered := false
+	var observed Entry
 	for _, b := range item.Baselines {
 		if b.Compare && scanSourceCovered(b.Scope, item.Media.Path) {
 			var observation string
 			var v scanObservation
 			e = tx.QueryRow("SELECT payload FROM scan_entries WHERE run=? AND remote=? AND source=? AND done=1", b.Run, item.Media.RemoteID, item.Media.Path).Scan(&observation)
 			covered = e == nil && json.Unmarshal([]byte(observation), &v) == nil && !v.Entry.Dir && v.Entry.Name == item.Media.Name
+			observed = v.Entry
 		}
 	}
 	if !covered {
 		return item, errors.New("缺少相同配置的完整扫描基线，请先扫描此规则")
+	}
+	// Scanning filters the original final name under sanitized parent paths,
+	// using the latest covered entry size rather than an older media index.
+	filterPath := path.Join(path.Dir(relative), observed.Name)
+	if rule.Filter.excluded(observed.Name, filterPath) || !rule.Filter.media(observed) {
+		return item, errors.New("当前规则已排除此媒体，本次仅供核对")
 	}
 	if item.Hash != contentHash([]byte(mediaContent(s.s, item.Media, item.Identity.Base))) {
 		return item, errors.New("登记内容与当前播放入口不同，本次仅供核对")

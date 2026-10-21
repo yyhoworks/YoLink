@@ -62,7 +62,10 @@ func scanContentIdentity(v scanIdentity) string {
 // Capture every covered pointer, including incompatible content identities, so
 // publication cannot silently discard a subtree completed after admission.
 func scanCoveredBaselines(tx *sql.Tx, identity scanIdentity) ([]scanBaseline, error) {
-	rows, err := tx.Query(`SELECT b.scope,b.run,b.identity,r.payload,r.status FROM scan_baselines b JOIN scan_runs r ON r.id=b.run WHERE b.rule=? ORDER BY length(b.scope),b.scope`, identity.Rule.ID)
+	// Publish retires covered descendant pointers, so surviving descendants are
+	// newer than their ancestor. Chronological overlay also selects the latest
+	// positive identity when separate sibling scans observed a moved file.
+	rows, err := tx.Query(`SELECT b.scope,b.run,b.identity,r.payload,r.status FROM scan_baselines b JOIN scan_runs r ON r.id=b.run WHERE b.rule=? ORDER BY r.completed,r.rowid,b.scope`, identity.Rule.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -515,6 +518,10 @@ func scanSourceCovered(root, source string) bool {
 }
 
 func pruneScanHistoryTx(tx *sql.Tx) error {
+	// Also collect pointers left by old versions or out-of-band rule removal.
+	if _, err := tx.Exec("DELETE FROM scan_baselines WHERE NOT EXISTS (SELECT 1 FROM rules WHERE rules.id=scan_baselines.rule)"); err != nil {
+		return err
+	}
 	if _, err := tx.Exec("DELETE FROM change_plans WHERE created<?", time.Now().Add(-24*time.Hour).Unix()); err != nil {
 		return err
 	}

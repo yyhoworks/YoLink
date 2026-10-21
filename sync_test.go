@@ -71,8 +71,11 @@ func setup(t *testing.T) *fixture {
 	return f
 }
 func finish(t *testing.T, f *fixture, j Job) Job {
+	return finishWithin(t, f, j, 5*time.Second)
+}
+func finishWithin(t *testing.T, f *fixture, j Job, budget time.Duration) Job {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		v, e := f.s.job(j.ID)
 		if e != nil {

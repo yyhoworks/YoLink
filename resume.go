@@ -80,12 +80,12 @@ func (e *Engine) saveScan(j Job, cp *ScanCheckpoint) error {
 				return err
 			}
 		}
-		if cp.activity != nil {
-			if err = writeScanActivityTx(tx, *cp.activity); err != nil {
-				return err
-			}
-		}
 		if err = markScanObservationTx(tx, cp.scan.Run.ID, cp.observed); err != nil {
+			return err
+		}
+	}
+	if cp.activity != nil {
+		if err = writeScanActivityTx(tx, *cp.activity); err != nil {
 			return err
 		}
 	}
@@ -465,6 +465,9 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 	}
 	if cp.scan != nil {
 		return e.generateScanMedia(ctx, a, r, j, d, f, source, dest, m, content, cp)
+	}
+	if preserved, er := e.preserveRegisteredScanOutput(ctx, a, r, j, f, source, dest, m, content, cp); er != nil || preserved {
+		return er
 	}
 	if err = e.s.saveMedia(m); err != nil {
 		return errors.New("保存媒体索引失败")

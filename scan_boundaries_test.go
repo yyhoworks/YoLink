@@ -75,7 +75,9 @@ func TestPartialHistoryExposesLocalIssuesWithoutAbsenceAuthority(t *testing.T) {
 	if j.Status != "partial" {
 		t.Fatal(j)
 	}
-	f.s.db.Exec("INSERT INTO scan_changes VALUES(?,'fabricated','source_absent','{}','')", j.ID)
+	if _, err := f.s.db.Exec("INSERT INTO scan_changes VALUES(?,'fabricated','source_absent','{}','')", j.ID); err != nil {
+		t.Fatal(err)
+	}
 	result := changeHistoryResult(t, f, "rule=rule&run="+j.ID)
 	if result["total"] != float64(2) || result["run_status"] != "partial" {
 		t.Fatal(result)

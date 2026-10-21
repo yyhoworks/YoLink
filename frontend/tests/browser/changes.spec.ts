@@ -32,7 +32,35 @@ for(const width of [1440,390])test(`changes review, preview and uncertain repair
  await expect(page.locator('#change-repair-error')).toContainText('已读取逐项状态');await expect(page.locator('#change-repair-apply')).toBeDisabled();
  await page.locator('#change-repair-confirm').check();await page.locator('#change-repair-apply').click();
  await expect(page.locator('#change-repair-panel')).toContainText('已核验完成 1 项');expect(writes).toEqual(['preview','apply','apply']);
+ if(width===390){
+  await expect(page.locator('#toast')).toBeHidden({timeout:6000});
+  await page.evaluate(()=>scrollTo(0,Math.max(0,document.querySelector('#change-repair-panel')!.getBoundingClientRect().top+scrollY-105)));
+  await page.screenshot({path:testInfo.outputPath('repair-result-390-viewport.png')});
+ }
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(errors).toEqual([]);
+});
+
+test('repair keeps a usable keyboard path through uncertain reads and completion',async({page})=>{
+ await fixture(page);let state='preview',readFails=false,applies=0;
+ const summary=()=>({id,revision,total:1,ready:1,done:state==='complete'?1:0,conflicts:0,state,items:[{path:'test/media/movie.strm',ready:true,state:state==='complete'?'recovered':state==='applying'?'intent':'preview',note:'按登记内容核验此缺失 STRM'}]});
+ await page.route('**/api/changes/preview',route=>route.fulfill({json:summary()}));
+ await page.route('**/api/changes/'+id,route=>readFails?route.fulfill({status:503,json:{error:'状态暂时不可用'}}):route.fulfill({json:summary()}));
+ await page.route('**/api/changes/'+id+'/apply',async route=>{applies++;if(applies===1){state='applying';readFails=true;await route.abort('connectionreset')}else{state='complete';await route.fulfill({json:summary()})}});
+ await page.goto('/#inventory');await expect(page.locator('[data-output-select]')).toBeVisible();
+ await page.locator('[data-output-select]').focus();await page.keyboard.press('Space');
+ // Reach the preview action using the browser's real sequential focus order.
+ for(let i=0;i<100&&!await page.locator('#inventory-repair').evaluate(el=>el===document.activeElement);i++)await page.keyboard.press('Tab');
+ await expect(page.locator('#inventory-repair')).toBeFocused();await page.keyboard.press('Enter');
+ await expect(page.locator('#change-repair-title')).toBeFocused();
+ await page.keyboard.press('Tab');await expect(page.locator('#change-repair-close')).toBeFocused();
+ await page.keyboard.press('Tab');await expect(page.locator('#change-repair-confirm')).toBeFocused();await page.keyboard.press('Space');
+ await page.keyboard.press('Tab');await expect(page.locator('#change-repair-apply')).toBeFocused();await page.keyboard.press('Enter');
+ await expect(page.locator('#change-repair-error')).toContainText('请再次读取保存状态');await expect(page.locator('#change-repair-title')).toBeFocused();await expect(page.locator('#change-repair-confirm')).toBeDisabled();
+ await page.keyboard.press('Tab');await page.keyboard.press('Tab');await expect(page.locator('#change-repair-recheck')).toBeFocused();
+ readFails=false;await page.keyboard.press('Enter');await expect(page.locator('#change-repair-title')).toBeFocused();await expect(page.locator('#change-repair-confirm')).toBeEnabled();
+ await page.keyboard.press('Tab');await page.keyboard.press('Tab');await expect(page.locator('#change-repair-confirm')).toBeFocused();await page.keyboard.press('Space');await page.keyboard.press('Tab');await page.keyboard.press('Enter');
+ await expect(page.locator('#change-repair-panel')).toContainText('已核验完成 1 项');await expect(page.locator('#change-repair-title')).toBeFocused();
+ await page.keyboard.press('Tab');await expect(page.locator('#change-repair-close')).toBeFocused();await page.keyboard.press('Enter');await expect(page.locator('#inventory-refresh')).toBeFocused();expect(applies).toBe(2);
 });
 
 for(const scene of ['movies','series','music'])test(`scene template ${scene} only changes an editable draft`,async({page})=>{

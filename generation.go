@@ -134,7 +134,19 @@ func (s *Server) removeRule(w http.ResponseWriter, r *http.Request) {
 	}
 	s.s.configMu.Lock()
 	defer s.s.configMu.Unlock()
-	if _, e := s.s.db.Exec("DELETE FROM rules WHERE id=?", id); e != nil {
+	tx, e := s.s.db.Begin()
+	if e != nil {
+		fail(w, 500, "移除目录规则失败")
+		return
+	}
+	defer tx.Rollback()
+	if _, e = tx.Exec("DELETE FROM scan_baselines WHERE rule=?", id); e == nil {
+		_, e = tx.Exec("DELETE FROM rules WHERE id=?", id)
+	}
+	if e == nil {
+		e = tx.Commit()
+	}
+	if e != nil {
 		fail(w, 500, "移除目录规则失败")
 		return
 	}

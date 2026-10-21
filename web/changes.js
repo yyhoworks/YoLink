@@ -30,9 +30,12 @@ function renderChangeRepair(result){
  panel.hidden=false;
  panel.innerHTML=`<div class="section-heading"><h2 id="change-repair-title" tabindex="-1">缺失 STRM 修复预览</h2><button type="button" id="change-repair-close">收起预览</button></div><p class="hint">共 ${result.total} 项，可恢复 ${result.ready} 项，已核验完成 ${result.done||0} 项，冲突 ${result.conflicts||0} 项。只按登记内容恢复缺失文件，已存在或变化的文件保留。</p><ul class="change-repair-items">${result.items.map(v=>`<li><code>${esc(v.path)}</code><p class="${v.state==='conflict'?'error':'hint'}">${esc(v.note)}</p></li>`).join('')}</ul><p id="change-repair-error" class="error" role="alert" ${changeRepairUncertain?'':'hidden'}>${changeRepairUncertain?'尚未确认执行结果，请先读取保存状态。':''}</p><label class="checkbox"><input id="change-repair-confirm" type="checkbox" ${enabled?'':'disabled'}>我已核对以上路径，仅恢复缺失的 STRM</label><div class="form-actions"><button id="change-repair-apply" class="primary" type="button" disabled>${result.state==='applying'?'继续核验本次修复':'确认修复缺失'}</button><button id="change-repair-recheck" type="button">读取保存状态</button></div>`;
  $('change-repair-confirm').addEventListener('change',e=>{$('change-repair-apply').disabled=!e.target.checked||!enabled});
- $('change-repair-close').onclick=()=>{panel.hidden=true};
+ $('change-repair-close').onclick=()=>{panel.hidden=true;($('inventory-repair').disabled?$('inventory-refresh'):$('inventory-repair')).focus()};
  $('change-repair-recheck').onclick=e=>action(e.currentTarget,()=>readChangeRepair());
  $('change-repair-apply').onclick=e=>action(e.currentTarget,()=>applyChangeRepair());
+ // Every repaint follows an explicit preview/apply/status action. Replacing
+ // its controls must leave keyboard users at the updated result and next step.
+ $('change-repair-title').focus({preventScroll:true});
 }
 async function readChangeRepair(){
  if(!changeRepair)return;
