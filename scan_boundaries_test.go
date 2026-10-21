@@ -31,6 +31,9 @@ func TestScopedHistoryUsesAncestorAndKeepsRootFullTime(t *testing.T) {
 	if root.Status != "completed" {
 		t.Fatal(root)
 	}
+	if _, err := f.s.db.Exec("UPDATE scan_runs SET completed=4102444800 WHERE id=?", root.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.s.db.Exec("UPDATE scan_baselines SET full_completed=123 WHERE scope='/media'"); err != nil {
 		t.Fatal(err)
 	}

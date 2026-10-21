@@ -246,7 +246,7 @@ func TestScanHistorySiblingMovesUseLatestCoveredObservation(t *testing.T) {
 					t.Fatal(j)
 				}
 				entry := Entry{ID: "movie", Name: "movie.mkv", Size: 12, Modified: "v1"}
-				for _, scope := range []string{older, latest} {
+				for step, scope := range []string{older, latest} {
 					f.c.dirs[older], f.c.dirs[latest] = nil, nil
 					f.c.dirs[scope] = []Entry{entry}
 					j, err := f.e.enqueue(f.r.ID, scope, "/media/"+scope, false, 0)
@@ -255,6 +255,11 @@ func TestScanHistorySiblingMovesUseLatestCoveredObservation(t *testing.T) {
 					}
 					if j = finish(t, f, j); j.Status != "completed" {
 						t.Fatal(j)
+					}
+					// Simulate NAS/NTP wall-clock rollback without changing the
+					// host clock. Publication order must remain authoritative.
+					if _, err = f.s.db.Exec("UPDATE scan_runs SET completed=? WHERE id=?", 3000000000-step*1000000000, j.ID); err != nil {
+						t.Fatal(err)
 					}
 				}
 				if !present {

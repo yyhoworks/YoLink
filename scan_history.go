@@ -62,10 +62,10 @@ func scanContentIdentity(v scanIdentity) string {
 // Capture every covered pointer, including incompatible content identities, so
 // publication cannot silently discard a subtree completed after admission.
 func scanCoveredBaselines(tx *sql.Tx, identity scanIdentity) ([]scanBaseline, error) {
-	// Publish retires covered descendant pointers, so surviving descendants are
-	// newer than their ancestor. Chronological overlay also selects the latest
-	// positive identity when separate sibling scans observed a moved file.
-	rows, err := tx.Query(`SELECT b.scope,b.run,b.identity,r.payload,r.status FROM scan_baselines b JOIN scan_runs r ON r.id=b.run WHERE b.rule=? ORDER BY r.completed,r.rowid,b.scope`, identity.Rule.ID)
+	// Each publication assigns a rowid greater than every surviving pointer in
+	// the same transaction. This orders sibling observations even after a clock
+	// rollback or an older run finishing later. A parent retires its descendants.
+	rows, err := tx.Query(`SELECT b.scope,b.run,b.identity,r.payload,r.status FROM scan_baselines b JOIN scan_runs r ON r.id=b.run WHERE b.rule=? ORDER BY b.rowid`, identity.Rule.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -488,7 +488,11 @@ func (session *scanSession) publish(ctx context.Context) error {
 	if _, err = tx.Exec("UPDATE scan_runs SET status='complete',completed=? WHERE id=?", completed, session.Run.ID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec("INSERT INTO scan_baselines VALUES(?,?,?,?,?,?) ON CONFLICT(rule,scope) DO UPDATE SET run=excluded.run,identity=excluded.identity,completed=excluded.completed,full_completed=excluded.full_completed", session.Run.Identity.Rule.ID, session.Run.Identity.Source, session.Run.ID, restoreRevision(session.Run.Identity), completed, fullAt); err != nil {
+	var publication int64
+	if err = tx.QueryRow("SELECT COALESCE(MAX(rowid),0)+1 FROM scan_baselines").Scan(&publication); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO scan_baselines(rowid,rule,scope,run,identity,completed,full_completed) VALUES(?,?,?,?,?,?,?) ON CONFLICT(rule,scope) DO UPDATE SET rowid=excluded.rowid,run=excluded.run,identity=excluded.identity,completed=excluded.completed,full_completed=excluded.full_completed", publication, session.Run.Identity.Rule.ID, session.Run.Identity.Source, session.Run.ID, restoreRevision(session.Run.Identity), completed, fullAt); err != nil {
 		return err
 	}
 	for _, b := range covered {
