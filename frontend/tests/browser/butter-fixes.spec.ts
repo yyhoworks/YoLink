@@ -175,8 +175,14 @@ test('cloud-more compact menu popover remains high-contrast in glass modes and f
  await expect(page.getByLabel('搜索文件、路径或客户端')).toHaveAttribute('placeholder','搜索文件名、输出路径、IP、PotPlayer…');
  const recordsTops=await page.locator('#records-filter-form :is(input,select,button):visible').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().top)));
  expect(new Set(recordsTops).size).toBe(1);
+ const panelRadii=await page.locator('#records-filter-form,.records-caption,#records-table-panel').evaluateAll(els=>els.map(el=>getComputedStyle(el).borderRadius));
+ expect(panelRadii).toEqual(['16px','16px','16px']);
+ const rowCellRadius=await page.locator('#records-table-panel tr.compact-record-row > td').first().evaluate(el=>getComputedStyle(el).borderRadius);
+ expect(rowCellRadius).toBe('10px');
  await page.locator('#records-deliveries-tab').click();
  await expect(page.getByLabel('搜索投递任务、目录或错误')).toHaveAttribute('placeholder','搜索投递任务、目录或错误…');
+ const deliveryCellRadius=await page.locator('#records-table-panel tr > td').first().evaluate(el=>getComputedStyle(el).borderRadius);
+ expect(deliveryCellRadius).toBe('10px');
 
  await page.goto('/#inventory');
  await expect(page.getByLabel('文件或路径')).toBeVisible();
