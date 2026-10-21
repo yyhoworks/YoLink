@@ -88,8 +88,17 @@ func cloudProtocolError(message string) error {
 func cloudAPIError(code string) error {
 	// Only documented HTTP-shaped statuses have shared semantics. Do not infer
 	// expired credentials from provider-specific numeric codes or hint words.
+	// Callers must only pass values from fields that mirror HTTP status;
+	// provider business codes go through cloudBusinessError instead.
 	if status, err := strconv.Atoi(code); err == nil && (status == 401 || status == 403 || status == 404 || status == 408 || status == 429 || status >= 500 && status <= 599) {
 		return cloudHTTPError(status, "", time.Now())
 	}
+	return cloudBusinessError(code)
+}
+
+// cloudBusinessError classifies a provider-specific business code. Such
+// codes only coincidentally resemble HTTP statuses, so they never inherit
+// HTTP semantics (credential expiry, retryability) and stay Kind=other.
+func cloudBusinessError(code string) error {
 	return &CloudError{Kind: "other", Code: safeCode(code), Message: fmt.Sprintf("网盘接口拒绝请求（%s），请检查通道状态或账号权益", safeCode(code))}
 }

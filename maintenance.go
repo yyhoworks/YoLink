@@ -55,11 +55,22 @@ func (s *Server) savePlan(p MaintenancePlan) error {
 	if e != nil {
 		return e
 	}
-	temp := dest + ".tmp"
-	if e = os.WriteFile(temp, raw, 0600); e != nil {
+	f, e := os.CreateTemp(filepath.Dir(dest), ".plan-*.tmp")
+	if e != nil {
 		return e
 	}
-	return os.Rename(temp, dest)
+	defer os.Remove(f.Name())
+	if _, e = f.Write(raw); e == nil {
+		e = f.Sync()
+	}
+	closed := f.Close()
+	if e != nil {
+		return e
+	}
+	if closed != nil {
+		return closed
+	}
+	return os.Rename(f.Name(), dest)
 }
 func (s *Server) loadPlan(id string) (MaintenancePlan, error) {
 	var p MaintenancePlan

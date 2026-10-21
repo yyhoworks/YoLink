@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -399,27 +400,66 @@ func (o temporaryFiles) cleanupExports() error {
 	} else if err != nil {
 		return err
 	}
-	entries, err := o.entries(backupWorkName, temporaryControlLimit)
+	if err := temporaryCheckPath(o.root, backupWorkName, true); err != nil {
+		return err
+	}
+	dir, err := o.root.Open(backupWorkName)
 	if err != nil {
 		return err
 	}
+	defer dir.Close()
+	// Stream the control directory in bounded chunks rather than loading
+	// it whole. Previously one malformed claim — or simply more than
+	// temporaryControlLimit entries — aborted the sweep before anything
+	// was collected, so valid exports piled up behind a single bad file.
 	var ids []string
-	for _, entry := range entries {
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if id == entry.Name() || !restoreIDValid(id) {
-			continue
+	unrecognized := 0
+	overflow := false
+	for {
+		chunk, readErr := dir.ReadDir(256)
+		for _, entry := range chunk {
+			name := entry.Name()
+			if id := strings.TrimSuffix(name, ".json"); id != name && restoreIDValid(id) {
+				if len(ids) < temporaryControlLimit {
+					ids = append(ids, id)
+				} else {
+					overflow = true
+				}
+				continue
+			}
+			if restoreIDValid(name) {
+				// A bare id is a target directory (possibly an operator's
+				// own, unclaimed one): recognized, never deleted here.
+				continue
+			}
+			unrecognized++
 		}
-		if err = o.readClaim("export", id); err != nil {
-			return err
+		if readErr == io.EOF {
+			break
 		}
-		ids = append(ids, id)
+		if readErr != nil {
+			return readErr
+		}
 	}
+	// With the directory dominated by files we cannot classify, claims
+	// can no longer be told apart from clutter reliably; refuse before
+	// deleting anything, exactly as the previous hard limit did.
+	if unrecognized >= temporaryControlLimit {
+		return errors.New("临时控制资料过多，请先检查磁盘")
+	}
+	var failures []error
 	for _, id := range ids {
-		if err = o.cleanup("export", id); err != nil {
-			return err
+		// cleanup re-validates the claim before removing anything, so a
+		// malformed entry keeps its tree; record the failure and carry on
+		// with the remaining exports instead of abandoning them.
+		if err := o.cleanup("export", id); err != nil {
+			failures = append(failures, fmt.Errorf("导出临时文件 %s 清理失败：%w", id, err))
 		}
 	}
-	return nil
+	if overflow {
+		failures = append(failures, errors.New("临时控制资料过多，本次仅清理了一部分，请再次运行清理"))
+	}
+	return errors.Join(failures...)
 }
 
 func (m *restoreManager) temporaryFiles() temporaryFiles {

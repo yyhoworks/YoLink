@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -180,7 +182,53 @@ func (s *Server) integrations(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOut(w, 200, object{"config": c, "deliveries": deliveries})
 }
+// checkServiceDestination vets where an integration request may carry
+// credentials (the media library API key or a signed webhook). Link-local
+// destinations are always refused: that range includes the cloud metadata
+// address 169.254.169.254, the one destination that can leak credentials
+// the user never configured, and no legitimate receiver lives there.
+// Loopback and other private addresses stay allowed on purpose: pointing
+// a webhook or library at a same-host or LAN self-hosted service (Hermes
+// on this machine, a NAS Emby) is an intended deployment shape — the
+// repository's own integration tests codify loopback webhook receivers —
+// so that residual surface is an accepted trade-off of holding the
+// configuration permission, not something this check tries to remove.
+func checkServiceDestination(ctx context.Context, target string) error {
+	u, err := url.Parse(target)
+	if err != nil || u.Hostname() == "" {
+		return errors.New("联动请求地址无效")
+	}
+	host := u.Hostname()
+	var addrs []netip.Addr
+	if addr, err := netip.ParseAddr(host); err == nil {
+		addrs = []netip.Addr{addr}
+	} else {
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return errors.New("连接失败，请检查地址、网络及服务状态")
+		}
+		for _, v := range ips {
+			if addr, ok := netip.AddrFromSlice(v.IP); ok {
+				addrs = append(addrs, addr)
+			}
+		}
+		if len(addrs) == 0 {
+			return errors.New("连接失败，请检查地址、网络及服务状态")
+		}
+	}
+	for _, addr := range addrs {
+		addr = addr.Unmap()
+		if addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
+			return errors.New("联动地址指向链路本地地址（含云元数据服务），已拒绝发送凭据")
+		}
+	}
+	return nil
+}
+
 func integrationRequest(ctx context.Context, method, target, key string, body any, headers ...http.Header) error {
+	if err := checkServiceDestination(ctx, target); err != nil {
+		return err
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewBufferString(scanJSON(body))
@@ -404,7 +452,7 @@ func (s *Server) retryDelivery(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "投递记录不存在")
 		return
 	}
-	if kind == "webhook" {
+	if strings.HasPrefix(kind, "webhook") {
 		items, err := s.s.channels()
 		if err != nil {
 			fail(w, 500, err.Error())

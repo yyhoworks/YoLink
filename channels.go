@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -167,11 +168,32 @@ func (c NotificationChannel) validate() error {
 	return nil
 }
 
-// The configurable transport is only injected by isolated tests. Production uses
-// Telegram's fixed HTTPS endpoint and never touches update consumers or menus.
-var telegramHTTPClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+// Telegram sends always use the fixed HTTPS endpoint below and never touch
+// update consumers or menus. The transport is resolved per Store: production
+// uses defaultTelegramHTTPClient, while isolated tests may register a client
+// on their own Store via setTelegramClient. This replaces the former
+// package-level telegramHTTPClient variable, whose mutation coupled every
+// fixture in the process to whichever test had run most recently.
+var defaultTelegramHTTPClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
-func sendChannel(ctx context.Context, c NotificationChannel, payload any, id string) error {
+var telegramClients sync.Map // map[*Store]*http.Client, test seam only
+
+func telegramClientFor(s *Store) *http.Client {
+	if v, ok := telegramClients.Load(s); ok {
+		return v.(*http.Client)
+	}
+	return defaultTelegramHTTPClient
+}
+
+func setTelegramClient(s *Store, client *http.Client) {
+	if client == nil {
+		telegramClients.Delete(s)
+		return
+	}
+	telegramClients.Store(s, client)
+}
+
+func sendChannel(ctx context.Context, client *http.Client, c NotificationChannel, payload any, id string) error {
 	if c.Type != "telegram" {
 		return webhookRequest(ctx, IntegrationConfig{Webhook: c.Webhook, WebhookSecret: c.Secret}, payload, id)
 	}
@@ -192,7 +214,7 @@ func sendChannel(ctx context.Context, c NotificationChannel, payload any, id str
 		return errors.New("Telegram 请求无法创建")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := telegramHTTPClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return errors.New("Telegram 连接失败，请检查 NAS 网络与代理配置")
 	}
@@ -433,25 +455,31 @@ func (s *Server) removeNotificationChannel(w http.ResponseWriter, r *http.Reques
 	jsonOut(w, 200, object{"ok": true})
 }
 func (s *Server) testNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	// Snapshot the channel under the lock, send without it (a slow endpoint
+	// may take the full 15s and must not block channel management or
+	// delivery bookkeeping), then re-acquire the lock only to record the
+	// result on a freshly read list.
 	s.s.channelsMu.Lock()
-	defer s.s.channelsMu.Unlock()
 	items, err := s.s.channels()
 	if err != nil {
+		s.s.channelsMu.Unlock()
 		fail(w, 500, err.Error())
 		return
 	}
-	index := -1
-	for i, c := range items {
+	var snapshot *NotificationChannel
+	for _, c := range items {
 		if c.ID == r.PathValue("id") {
-			index = i
+			copied := c
+			snapshot = &copied
 			break
 		}
 	}
-	if index < 0 {
+	s.s.channelsMu.Unlock()
+	if snapshot == nil {
 		fail(w, 404, "通知连接不存在")
 		return
 	}
-	c := items[index]
+	c := *snapshot
 	if !c.Enabled {
 		fail(w, 400, "请先启用并保存此通知连接")
 		return
@@ -462,7 +490,25 @@ func (s *Server) testNotificationChannel(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	err = sendChannel(ctx, c, object{"title": "YoLink 测试通知", "text": "通知连接「" + c.Name + "」测试成功", "event": "test"}, randomID())
+	err = sendChannel(ctx, telegramClientFor(s.s), c, object{"title": "YoLink 测试通知", "text": "通知连接「" + c.Name + "」测试成功", "event": "test"}, randomID())
+	s.s.channelsMu.Lock()
+	defer s.s.channelsMu.Unlock()
+	items, loadErr := s.s.channels()
+	if loadErr != nil {
+		fail(w, 500, "测试已执行，但结果保存失败，请刷新状态")
+		return
+	}
+	index := -1
+	for i, item := range items {
+		if item.ID == c.ID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		fail(w, 404, "通知连接不存在")
+		return
+	}
 	items[index].Tested = time.Now().Unix()
 	items[index].TestOK = err == nil
 	tx, saveErr := s.s.db.Begin()
@@ -485,6 +531,20 @@ func (s *Server) testNotificationChannel(w http.ResponseWriter, r *http.Request)
 	jsonOut(w, 200, object{"ok": true, "note": "接收服务已接受测试通知，请在目标会话核对。"})
 }
 
+// notificationEventClass reduces a delivery payload to the event class a
+// channel subscribes to: channels only distinguish success from failure.
+func notificationEventClass(raw string) string {
+	var v struct {
+		Status string `json:"status"`
+		Event  string `json:"event"`
+	}
+	_ = json.Unmarshal([]byte(raw), &v)
+	if v.Event == "ingest_failed" || v.Status == "failed" || v.Status == "partial" || v.Status == "cancelled" || v.Status == "interrupted" {
+		return "failure"
+	}
+	return "success"
+}
+
 func (e *Engine) queueNotifications(job string, payload any) {
 	e.s.channelsMu.Lock()
 	defer e.s.channelsMu.Unlock()
@@ -492,27 +552,52 @@ func (e *Engine) queueNotifications(job string, payload any) {
 	if err != nil {
 		return
 	}
-	var v struct {
-		Status string `json:"status"`
-		Event  string `json:"event"`
-	}
 	raw := scanJSON(payload)
-	_ = json.Unmarshal([]byte(raw), &v)
-	event := "success"
-	if v.Event == "ingest_failed" || v.Status == "failed" || v.Status == "partial" || v.Status == "cancelled" || v.Status == "interrupted" {
-		event = "failure"
-	}
+	event := notificationEventClass(raw)
 	for _, c := range items {
 		if !c.Enabled {
 			continue
 		}
 		for _, allowed := range c.Events {
 			if allowed == event {
-				_, _ = e.s.db.Exec("INSERT OR IGNORE INTO deliveries(id,job,kind,status,next_at,payload,channel,channel_name,channel_version,created) VALUES(?,?,'webhook','pending',?,?,?,?,?,?)", randomID(), job, time.Now().Add(3*time.Second).Unix(), raw, c.ID, c.Name, c.Version, time.Now().Unix())
+				e.queueNotification(job, raw, event, c)
 				break
 			}
 		}
 	}
+}
+
+// queueNotification inserts one channel delivery for a job. Deliveries are
+// deduplicated per (job, event class, channel): queueing the same class
+// twice is a no-op. A second, different class for the same job must not be
+// swallowed by the UNIQUE(job,kind,channel) constraint (the previous
+// behaviour: whichever event arrived first won and later ones vanished),
+// so it is recorded with a class-qualified kind while the first delivery
+// of a job keeps the canonical "webhook" kind other queries rely on.
+// Callers must hold channelsMu, which serializes the check and insert.
+func (e *Engine) queueNotification(job, raw, event string, c NotificationChannel) {
+	rows, err := e.s.db.Query("SELECT payload FROM deliveries WHERE job=? AND channel=?", job, c.ID)
+	if err != nil {
+		return
+	}
+	kind := "webhook"
+	seen := false
+	for rows.Next() {
+		var existing string
+		if rows.Scan(&existing) != nil {
+			continue
+		}
+		seen = true
+		if notificationEventClass(existing) == event {
+			rows.Close()
+			return
+		}
+	}
+	rows.Close()
+	if seen {
+		kind = "webhook_" + event
+	}
+	_, _ = e.s.db.Exec("INSERT OR IGNORE INTO deliveries(id,job,kind,status,next_at,payload,channel,channel_name,channel_version,created) VALUES(?,?,?,'pending',?,?,?,?,?,?)", randomID(), job, kind, time.Now().Add(3*time.Second).Unix(), raw, c.ID, c.Name, c.Version, time.Now().Unix())
 }
 func (e *Engine) processNotification(id string) {
 	e.s.channelsMu.Lock()
@@ -543,6 +628,6 @@ func (e *Engine) processNotification(id string) {
 	}
 	var payload any
 	_ = json.Unmarshal([]byte(raw), &payload)
-	err = sendChannel(e.ctx, *current, payload, id)
+	err = sendChannel(e.ctx, telegramClientFor(e.s), *current, payload, id)
 	e.finishDelivery(id, attempts, err)
 }

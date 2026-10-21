@@ -48,7 +48,7 @@ func eventTokenHash(token string) string {
 }
 func (s *Server) authorizeEvent(w http.ResponseWriter, r *http.Request) bool {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if hmac.Equal([]byte(token), []byte(s.eventToken)) && s.s.setting("event_legacy_enabled", "1") == "1" {
+	if hmac.Equal([]byte(token), []byte(s.currentEventToken())) && s.s.setting("event_legacy_enabled", "1") == "1" {
 		*r = *r.WithContext(context.WithValue(r.Context(), eventAccessKey{}, eventAccess{ID: "legacy", Name: "兼容接入", Legacy: true}))
 		return true
 	}

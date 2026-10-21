@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,10 +21,21 @@ func env(name, def string) string {
 	}
 	return def
 }
+
+// listenPort extracts the port from a STRMLINK_LISTEN address so the
+// healthcheck probes the same port the server actually binds; it falls back
+// to the default 8796 when the address carries no usable port.
+func listenPort(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return "8796"
+	}
+	return port
+}
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		client := &http.Client{Timeout: 3 * time.Second}
-		r, e := client.Get("http://127.0.0.1:8796/healthz")
+		r, e := client.Get("http://127.0.0.1:" + listenPort(env("STRMLINK_LISTEN", ":8796")) + "/healthz")
 		if e != nil {
 			os.Exit(1)
 		}

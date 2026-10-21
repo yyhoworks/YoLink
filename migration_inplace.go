@@ -18,6 +18,13 @@ import (
 
 const inplaceMode = "migration-inplace"
 
+// inplaceOriginalBudget bounds how much original STRM text one plan retains
+// in memory and on disk across all of its items. Items past the budget keep
+// only their content hash; preview and conversion re-read those files and
+// verify the hash before replacing anything (see previewInplace and
+// convertInplace), so a missing Original never weakens the safety checks.
+const inplaceOriginalBudget = 64 << 20
+
 // A small durable checkpoint per item avoids rewriting the entire library plan
 // for every STRM and allows recovery if the connection closes during a batch.
 type inplaceProgress struct {
@@ -30,7 +37,10 @@ type inplaceProgress struct {
 
 func (s *Server) checkpointInplace(p MaintenancePlan, index int) error {
 	v := p.Items[index]
-	f, err := os.OpenFile(filepath.Join(s.s.dir, "plans", p.ID+".progress"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	name := filepath.Join(s.s.dir, "plans", p.ID+".progress")
+	_, statErr := os.Stat(name)
+	created := os.IsNotExist(statErr)
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -38,6 +48,16 @@ func (s *Server) checkpointInplace(p MaintenancePlan, index int) error {
 	err = json.NewEncoder(f).Encode(inplaceProgress{Index: index, Applied: v.Applied, Error: v.Error, Restored: v.Content == "", Media: v.Media})
 	if err == nil {
 		err = f.Sync()
+	}
+	if err == nil && created {
+		// The file's own Sync does not make its first directory entry
+		// durable. Sync the plans directory once, best effort: some
+		// platforms cannot sync a directory handle, and the record itself
+		// is already synced above.
+		if dir, openErr := os.Open(filepath.Dir(name)); openErr == nil {
+			_ = dir.Sync()
+			dir.Close()
+		}
 	}
 	return err
 }
@@ -50,14 +70,25 @@ func (s *Server) loadInplaceProgress(p *MaintenancePlan) error {
 		return err
 	}
 	defer f.Close()
-	decoder := json.NewDecoder(f)
-	for {
-		var event inplaceProgress
-		err = decoder.Decode(&event)
-		if err == io.EOF {
-			return nil
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return errors.New("迁移进度无法读取，请保留备份")
+	}
+	// Records are appended one JSON object per line, each followed by Sync,
+	// so a crash can tear only the final line, and only when it never got
+	// its newline. Tolerate exactly that tail; every complete record stays
+	// usable, while corruption anywhere else still refuses to load.
+	trailingNewline := len(raw) == 0 || raw[len(raw)-1] == '\n'
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
-		if err != nil {
+		var event inplaceProgress
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			if i == len(lines)-1 && !trailingNewline {
+				break
+			}
 			return errors.New("迁移进度无法读取，请保留备份")
 		}
 		if event.Index < 0 || event.Index >= len(p.Items) {
@@ -74,6 +105,7 @@ func (s *Server) loadInplaceProgress(p *MaintenancePlan) error {
 			v.Media = nil
 		}
 	}
+	return nil
 }
 
 // The NAS folder is read on the server. Browser file uploads cannot identify
@@ -101,6 +133,7 @@ func (s *Server) scanInplace(w http.ResponseWriter, r *http.Request) {
 	defer folder.Close()
 	p := MaintenancePlan{ID: randomID(), Mode: inplaceMode, Directory: filepath.ToSlash(filepath.Clean(filepath.FromSlash(in.Directory))), Created: time.Now().Unix()}
 	visited := 0
+	var retainedOriginals int64
 	err = fs.WalkDir(folder.FS(), ".", func(name string, d fs.DirEntry, walkErr error) error {
 		if r.Context().Err() != nil {
 			return r.Context().Err()
@@ -137,11 +170,19 @@ func (s *Server) scanInplace(w http.ResponseWriter, r *http.Request) {
 			if e != nil {
 				item.Error = e.Error()
 			} else {
-				item.Original = string(raw)
 				item.OldHash = contentHash(raw)
 				item.Storage, item.Source, e = parseMuvyo(raw)
 				if e != nil {
 					item.Error = e.Error()
+				}
+				// Retain the original text only within the plan-wide
+				// budget. An over-budget item is recognizable by
+				// Original == "" with OldHash set; preview re-reads and
+				// hash-verifies it before use, and conversion always
+				// re-reads before replacing.
+				if retainedOriginals+int64(len(raw)) <= inplaceOriginalBudget {
+					item.Original = string(raw)
+					retainedOriginals += int64(len(raw))
 				}
 			}
 		}
@@ -240,11 +281,36 @@ func (s *Server) previewInplace(w http.ResponseWriter, r *http.Request) {
 	}
 	// Keep each prepared plan immutable: old tabs retain their exact mappings.
 	p := MaintenancePlan{ID: randomID(), Mode: inplaceMode, Base: base, Directory: original.Directory, Created: time.Now().Unix(), Prepared: true}
+	var retainedOriginals int64
 	for _, old := range original.Items {
-		item := PlanItem{Path: old.Path, OldHash: old.OldHash, Original: old.Original, Storage: old.Storage, Source: old.Source}
-		storage, source, e := parseMuvyo([]byte(old.Original))
-		if e == nil && (old.OldHash == "" || contentHash([]byte(old.Original)) != old.OldHash) {
+		item := PlanItem{Path: old.Path, OldHash: old.OldHash, Storage: old.Storage, Source: old.Source}
+		originalText := old.Original
+		var rereadErr error
+		if originalText == "" && old.OldHash != "" {
+			// The scan did not retain this original (plan-wide size
+			// budget). Re-read it now and trust it only if it still
+			// matches the hash recorded at scan time.
+			raw, re := readMigrationFile(s.engine, old.Path)
+			if re != nil || contentHash(raw) != old.OldHash {
+				rereadErr = errors.New("原文未随扫描保留，重新读取后校验不一致，请重新扫描")
+			} else {
+				originalText = string(raw)
+			}
+		}
+		storage, source, e := parseMuvyo([]byte(originalText))
+		if rereadErr != nil {
+			e = rereadErr
+		}
+		if e == nil && (old.OldHash == "" || contentHash([]byte(originalText)) != old.OldHash) {
 			e = errors.New("原文件扫描校验无效，请重新扫描")
+		}
+		// The prepared plan observes the same retention budget as the scan.
+		// Conversion never reads Original (it re-reads the file and checks
+		// OldHash), so an unretained original costs only the "before" text
+		// in plan summaries.
+		if retainedOriginals+int64(len(originalText)) <= inplaceOriginalBudget {
+			item.Original = originalText
+			retainedOriginals += int64(len(originalText))
 		}
 		var a Account
 		if e == nil {

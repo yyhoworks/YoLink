@@ -107,7 +107,19 @@ func (s *Server) checkAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	files, checkErr := s.clouds.List(ctx, a.ID, a.Root)
+	// A connection check only has to prove the account answers and the
+	// credentials work; listing the first page is enough. A full listing
+	// of a huge root folder cannot finish inside this timeout (provider
+	// throttling alone exceeds it), which misreported healthy accounts
+	// as unreachable. The entry count below therefore reflects the first
+	// page for production providers.
+	var files []Entry
+	var checkErr error
+	if production, ok := s.clouds.(*Providers); ok {
+		files, checkErr = production.ListFirstPage(ctx, a.ID, a.Root)
+	} else {
+		files, checkErr = s.clouds.List(ctx, a.ID, a.Root)
+	}
 	if _, production := s.clouds.(*Providers); !production {
 		if err := s.s.observeAccount(a, "list", time.Now(), time.Now(), checkErr); err != nil {
 			fail(w, 500, "健康状态保存失败")

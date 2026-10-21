@@ -61,12 +61,27 @@ func newEngine(ctx context.Context, s *Store, c Clouds, output string) (*Engine,
 	go func() { defer en.wg.Done(); en.scheduler() }()
 	go func() { defer en.wg.Done(); en.ingestWorker() }()
 	go func() { defer en.wg.Done(); en.deliveryWorker() }()
+	// Feed the persisted backlog from its own goroutine: with more than a
+	// channel capacity of queued jobs, sending synchronously here would
+	// block newEngine — and with it service startup and health checks —
+	// until workers had executed most of the backlog one job at a time.
+	// The send order matches the previous behaviour, and Close cancels the
+	// engine context, which stops the feeder without leaking it.
 	jobs, _ := s.jobs(10000)
-	for i := len(jobs) - 1; i >= 0; i-- {
-		if jobs[i].Status == "queued" {
-			en.queue <- jobs[i].ID
+	en.wg.Add(1)
+	go func() {
+		defer en.wg.Done()
+		for i := len(jobs) - 1; i >= 0; i-- {
+			if jobs[i].Status != "queued" {
+				continue
+			}
+			select {
+			case en.queue <- jobs[i].ID:
+			case <-en.ctx.Done():
+				return
+			}
 		}
-	}
+	}()
 	return en, nil
 }
 func (e *Engine) Close() {
@@ -310,9 +325,13 @@ func (e *Engine) run(id string) {
 	}
 	// Timestamp even failed scans so invalid credentials do not cause a hot retry loop.
 	e.s.mu.Lock()
-	currentRule, _ := e.s.rule(r.ID)
-	currentRule.LastRun = time.Now().Unix()
-	_ = e.s.saveRule(currentRule)
+	// Skip the update when the rule can no longer be read (for example it
+	// was deleted while this job ran): saving the zero value would insert
+	// a blank rule row.
+	if currentRule, ruleErr := e.s.rule(r.ID); ruleErr == nil {
+		currentRule.LastRun = time.Now().Unix()
+		_ = e.s.saveRule(currentRule)
+	}
 	e.s.mu.Unlock()
 	a, err := e.s.account(r.Account)
 	if err == nil {
