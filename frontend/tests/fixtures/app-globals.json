@@ -130,5 +130,17 @@
   {
     "name": "initial",
     "kind": "const"
+  },
+  {
+    "name": "eventTokenCache",
+    "kind": "let"
+  },
+  {
+    "name": "eventTokenRequest",
+    "kind": "let"
+  },
+  {
+    "name": "ensureEventToken",
+    "kind": "function"
   }
 ]

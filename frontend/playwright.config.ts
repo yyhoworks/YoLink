@@ -1,5 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
+// Browser channel: Edge by default. Set PLAYWRIGHT_CHANNEL to another
+// channel, or to an empty string to use Playwright's bundled Chromium.
+const channel = process.env.PLAYWRIGHT_CHANNEL ?? 'msedge';
+
 export default defineConfig({
   testDir: './tests/browser',
   fullyParallel: false,
@@ -8,7 +12,7 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:18797',
     browserName: 'chromium',
-    channel: 'msedge',
+    ...(channel ? { channel } : {}),
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     reducedMotion: 'reduce',

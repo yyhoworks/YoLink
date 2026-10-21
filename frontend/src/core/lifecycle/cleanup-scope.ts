@@ -23,7 +23,16 @@ export function createCleanupScope() {
     pending: (key: string) => requests.has(key),
     cancel,
     interval(callback: () => void, milliseconds: number) {
-      if (!disposed) intervals.add(setInterval(() => { if (!disposed) callback(); }, milliseconds));
+      // Returns a cancel function for this timer only; dispose() still
+      // clears every timer that was not cancelled. A throwing callback is
+      // reported and isolated so one bad tick cannot kill the interval.
+      if (disposed) return () => {};
+      const timer = setInterval(() => {
+        if (disposed) return;
+        try { callback(); } catch (error) { console.error('cleanup scope interval callback failed', error); }
+      }, milliseconds);
+      intervals.add(timer);
+      return () => { clearInterval(timer); intervals.delete(timer); };
     },
     dispose() {
       if (disposed) return;

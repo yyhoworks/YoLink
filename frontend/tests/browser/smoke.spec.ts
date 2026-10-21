@@ -14,7 +14,7 @@ for (const width of [1440, 390]) {
     page.on('request', req => { if (!['GET', 'HEAD'].includes(req.method())) writes.push(req.url()); });
     await page.emulateMedia({ reducedMotion });
     await page.setViewportSize({ width, height: 1000 });
-    const bundle = await request.get('/app.js?v=0.10.0');
+    const bundle = await request.get('/app.js');
     expect(bundle.status()).toBe(200);
     await page.goto('/');
     await expect(page).toHaveURL(/\/#dashboard$/);

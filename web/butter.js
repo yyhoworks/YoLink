@@ -42,7 +42,7 @@
   if(clock.textContent!==value)clock.textContent=value;
  }
  // One page-owned timer updates only the clock, without rebuilding dashboard controls.
- setInterval(updateTaskClock,1000);
+ refreshLifecycle.scope.interval(updateTaskClock,1000);
  document.addEventListener('visibilitychange',updateTaskClock);
  renderDashboard=function(){
   const d=dashData;if(!d)return;
@@ -68,7 +68,7 @@
    return '<button data-nav="accounts"><span class="bw-provider">'+I('cloud')+'</span><span><strong>'+esc(a.name)+'</strong><small>'+esc(names[a.provider]||a.provider)+'</small></span><span class="bw-cloud-state '+(report?.reachable&&!a.disabled?'good':'')+'">'+text+'</span></button>';
   }).join(''):empty('连接移动云盘、夸克、阿里或 115，开始管理媒体。'))+'</div><button class="text bw-link" data-nav="accounts">'+I('plus')+'管理网盘账号</button>';
   const values=d.trend.map(v=>Number(v[dashChart])||0),max=Math.max(1,...values),total=d.trend.filter(v=>v.covered).reduce((a,v)=>a+(Number(v[dashChart])||0),0);
-  const bars=d.trend.map((v,index)=>'<button class="bw-bar '+(index===d.trend.length-1?'today':'')+'" data-trend-day="'+v.day+'" aria-label="'+v.day+' '+(v.covered?N(v[dashChart])+(dashChart==='created'?' 个新增入口':' 次请求'):'未采集')+'"><span class="bw-bar-track"><i data-bar-height="'+(v.covered?Math.max(3,values[index]/max*100):3)+'"></i></span><small>'+v.day.slice(5)+'</small></button>').join('');
+  const bars=d.trend.map((v,index)=>{const day=esc(v.day);return '<button class="bw-bar '+(index===d.trend.length-1?'today':'')+'" data-trend-day="'+day+'" aria-label="'+day+' '+(v.covered?N(v[dashChart])+(dashChart==='created'?' 个新增入口':' 次请求'):'未采集')+'"><span class="bw-bar-track"><i data-bar-height="'+(v.covered?Math.max(3,values[index]/max*100):3)+'"></i></span><small>'+esc(v.day.slice(5))+'</small></button>'}).join('');
   const trend='<div class="bw-trend-value"><strong>'+N(total)+'</strong><span>近 '+dashDays+' 天'+(dashChart==='created'?'新增 STRM':'入口请求')+'</span></div><div class="bw-chart '+(dashDays===30?'bw-chart-month':'')+'" role="group" aria-label="运行趋势">'+bars+'</div><div class="bw-trend-controls"><label class="sr-only" for="dash-days">趋势时间范围</label><select id="dash-days" aria-label="趋势时间范围"><option value="7" '+(dashDays===7?'selected':'')+'>近 7 天</option><option value="30" '+(dashDays===30?'selected':'')+'>近 30 天</option></select><button data-chart="'+(dashChart==='created'?'requests':'created')+'">'+(dashChart==='created'?'查看入口请求':'查看新增 STRM')+'</button></div><p class="hint">自 '+esc(new Date(d.metrics_since).toLocaleDateString('zh-CN'))+' 采集；较早日期无完整数据。</p>';
   const job=active.find(j=>j.status==='running')||active[0];
   const taskStarted=job?.status==='running'?Number(job.started)||0:0;
