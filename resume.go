@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,12 @@ type ScanCheckpoint struct {
 	filesDirty     bool
 	claimPath      string
 	claimMedia     string
+	scan           *scanSession
+	observed       string
+	item           *scanItem
+	frozenBase     string
+	local          *scanLocalChange
+	activity       *Activity
 }
 type PreviewItem struct {
 	Source  string `json:"source"`
@@ -49,11 +56,39 @@ func (e *Engine) saveScan(j Job, cp *ScanCheckpoint) error {
 	if old.Status == "cancelled" {
 		return context.Canceled
 	}
+	if cp.scan != nil {
+		e.s.configMu.RLock()
+		defer e.s.configMu.RUnlock()
+	}
 	tx, err := e.s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if cp.scan != nil {
+		if err = cp.scan.guard(tx); err != nil {
+			return err
+		}
+		if cp.item != nil {
+			if err = e.commitScanItemTx(tx, j, *cp.item); err != nil {
+				return err
+			}
+		}
+		if cp.local != nil {
+			raw, _ := json.Marshal(cp.local)
+			if _, err = tx.Exec("INSERT INTO scan_changes VALUES(?,?,?,'',?) ON CONFLICT(run,remote,kind) DO UPDATE SET after_payload=excluded.after_payload", cp.scan.Run.ID, cp.observed, cp.local.Kind, string(raw)); err != nil {
+				return err
+			}
+		}
+		if cp.activity != nil {
+			if err = writeScanActivityTx(tx, *cp.activity); err != nil {
+				return err
+			}
+		}
+		if err = markScanObservationTx(tx, cp.scan.Run.ID, cp.observed); err != nil {
+			return err
+		}
+	}
 	if err = saveJobTx(tx, j); err != nil {
 		return err
 	}
@@ -65,6 +100,9 @@ func (e *Engine) saveScan(j Job, cp *ScanCheckpoint) error {
 	}
 	cp.persisted, cp.structureDirty, cp.filesDirty = true, false, false
 	cp.claimPath, cp.claimMedia = "", ""
+	cp.observed, cp.item = "", nil
+	cp.local = nil
+	cp.activity = nil
 	return nil
 }
 func (e *Engine) noteFailure(j *Job, d ScanDir, message string) {
@@ -203,8 +241,34 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 	if len(j.RetryDirs) > 0 {
 		cp.Todo = j.RetryDirs
 	}
-	if err := e.s.loadCheckpoint(j.ID, &cp); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	loaded := e.s.loadCheckpoint(j.ID, &cp)
+	if loaded != nil && !errors.Is(loaded, sql.ErrNoRows) {
+		return loaded
+	}
+	legacyCheckpoint := false
+	if loaded == nil {
+		var sessions int
+		if err = e.s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM scan_runs WHERE id=?", j.ID).Scan(&sessions); err != nil {
+			return err
+		}
+		legacyCheckpoint = sessions == 0
+	}
+	ctx = context.WithValue(ctx, expectedAccountRevisionKey{}, expectedAccountRevision{ID: a.ID, Revision: a.Revision})
+	if !legacyCheckpoint {
+		cp.scan, err = e.s.startScanHistory(ctx, *j, r, e.outputMappingIdentity())
+	}
+	if err != nil {
 		return err
+	}
+	cp.frozenBase = base
+	if cp.scan != nil {
+		if cp.scan.Run.Identity.AccountRevision != a.Revision {
+			return errors.New("扫描账号身份已变化，请重新生成")
+		}
+		if cp.scan.Complete {
+			return nil
+		}
+		cp.frozenBase = cp.scan.Run.Identity.Base
 	}
 	// Also repair output paths in pre-fix checkpoints on automatic resume.
 	for i := range cp.Todo {
@@ -265,6 +329,12 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 				return err
 			}
 		}
+		// A restarted directory snapshot must also have a durable observation.
+		if cp.scan != nil {
+			if err = cp.scan.recordListing(ctx, d, cp.Files); err != nil {
+				return err
+			}
+		}
 		for cp.Index < len(cp.Files) {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -291,6 +361,9 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 				e.noteFailure(j, d, j.Message)
 			}
 			cp.Index++
+			if !f.Dir || r.Filter.excluded(f.Name, relative) {
+				cp.observed = f.ID
+			}
 			if err = e.saveScan(*j, &cp); err != nil {
 				*j = committed
 				return err
@@ -300,6 +373,7 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 			}
 		}
 		cp.Visited[d.ID] = true
+		cp.observed = d.ID
 		cp.Current = nil
 		cp.Files = nil
 		cp.Index = 0
@@ -307,6 +381,15 @@ func (e *Engine) scan(ctx context.Context, a Account, r Rule, j *Job) error {
 		if err := e.saveScan(*j, &cp); err != nil {
 			return err
 		}
+	}
+	if cp.scan != nil && j.Errors == 0 {
+		if err = e.hitScanFault("scan.before_publish"); err != nil {
+			return err
+		}
+		if err = cp.scan.publish(ctx); err != nil {
+			return err
+		}
+		return e.hitScanFault("scan.after_publish")
 	}
 	return nil
 }
@@ -361,7 +444,11 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 	}
 	cp.Claimed[dest] = mid
 	cp.claimPath, cp.claimMedia = dest, mid
-	content := []byte(e.s.setting("public_base", "") + "/s/" + mid + "/" + url.PathEscape(f.Name) + "?k=" + e.s.signature(mid) + "\n")
+	base := cp.frozenBase
+	if base == "" {
+		base = e.s.setting("public_base", "")
+	}
+	content := []byte(base + "/s/" + mid + "/" + url.PathEscape(f.Name) + "?k=" + e.s.signature(mid) + "\n")
 	if j.DryRun {
 		outcome := e.previewOutput(dest, mid, content)
 		switch outcome {
@@ -375,6 +462,9 @@ func (e *Engine) scanEntry(ctx context.Context, a Account, r Rule, j *Job, d Sca
 		addPreview(j, source, generationOutputName(e, dest), outcome)
 		e.generationActivity(a, r, *j, f, source, generationOutputName(e, dest), "preview", "strm", nil)
 		return nil
+	}
+	if cp.scan != nil {
+		return e.generateScanMedia(ctx, a, r, j, d, f, source, dest, m, content, cp)
 	}
 	if err = e.s.saveMedia(m); err != nil {
 		return errors.New("保存媒体索引失败")

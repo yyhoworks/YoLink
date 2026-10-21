@@ -41,7 +41,7 @@ describe('classic script migration contract', () => {
       '/playback-ui.js', '/records.js', '/app.js',
       '/console.js', '/automation.js',
       '/workbench.js', '/connections.js',
-      '/glass-color.js', '/appearance.js', '/butter.js', '/reliability.js', '/backup.js',
+      '/glass-color.js', '/appearance.js', '/butter.js', '/reliability.js', '/backup.js','/changes.js',
     ]);
     for (const [, attrs] of scripts) {
       expect(attrs).toMatch(/\bdefer\b/);

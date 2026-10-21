@@ -262,7 +262,7 @@ func validateBackupSchema(ctx context.Context, db *sql.DB, version int) error {
 	}
 	defer reference.Close()
 	reference.SetMaxOpenConns(1)
-	migrations := []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics}
+	migrations := []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics, migrateScanHistory}
 	if err = applySchemaMigrations(reference, migrations[:version]); err != nil {
 		return errors.New("无法建立恢复结构基线")
 	}
@@ -312,6 +312,15 @@ func validateBackupSchema(ctx context.Context, db *sql.DB, version int) error {
 func validateBackupRows(ctx context.Context, db *sql.DB) error {
 	var err error
 	var invalid int
+	var version int
+	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version >= 5 {
+		if err = validateBackupScanRows(ctx, db); err != nil {
+			return err
+		}
+	}
 	// Check status BEFORE selecting it into Go. SQLite column affinity is not a
 	// type constraint: BLOB IDs break the textual keyset used by quarantine.
 	if err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM jobs WHERE typeof(status)<>'text' OR length(CAST(status AS BLOB))>64").Scan(&invalid); err != nil || invalid != 0 {
@@ -558,6 +567,13 @@ func pauseRestoredWork(ctx context.Context, dir string) error {
 // single "Enabled" field could otherwise survive json_set('$.enabled',false).
 // Bounded keyset batches avoid materializing all restored jobs at once.
 func quarantineBackupPayloads(ctx context.Context, tx *sql.Tx) error {
+	// Completed observations remain available for inspection, but no historical
+	// pointer or per-item intent can authorize work in this restored generation.
+	for _, q := range []string{"DELETE FROM scan_baselines", "UPDATE scan_runs SET status='quarantined'", "UPDATE scan_items SET state='quarantined'", "UPDATE change_plans SET state='quarantined'", "UPDATE change_items SET state='quarantined'"} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return errors.New("恢复扫描与修复隔离失败")
+		}
+	}
 	for _, table := range []string{"rules", "jobs"} {
 		last := ""
 		for {

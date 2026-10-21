@@ -33,20 +33,23 @@ type Account struct {
 	Secrets    map[string]string `json:"secrets,omitempty"`
 }
 type Rule struct {
-	Filter         FileFilter `json:"filter"`
-	RefreshLibrary bool       `json:"refresh_library"`
-	Notify         bool       `json:"notify"`
-	CopyNonMedia   bool       `json:"copy_non_media"`
-	CopySubtitles  bool       `json:"copy_subtitles"`
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Account        string     `json:"account"`
-	Folder         string     `json:"folder"`
-	SourcePath     string     `json:"source_path"`
-	Output         string     `json:"output"`
-	Interval       int        `json:"interval"`
-	Enabled        bool       `json:"enabled"`
-	LastRun        int64      `json:"last_run"`
+	Template        string     `json:"template,omitempty"`
+	TemplateVersion int        `json:"template_version,omitempty"`
+	Incremental     bool       `json:"incremental,omitempty"`
+	Filter          FileFilter `json:"filter"`
+	RefreshLibrary  bool       `json:"refresh_library"`
+	Notify          bool       `json:"notify"`
+	CopyNonMedia    bool       `json:"copy_non_media"`
+	CopySubtitles   bool       `json:"copy_subtitles"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	Account         string     `json:"account"`
+	Folder          string     `json:"folder"`
+	SourcePath      string     `json:"source_path"`
+	Output          string     `json:"output"`
+	Interval        int        `json:"interval"`
+	Enabled         bool       `json:"enabled"`
+	LastRun         int64      `json:"last_run"`
 }
 type Entry struct {
 	PickCode string `json:"pickcode,omitempty"`
@@ -67,42 +70,47 @@ type Media struct {
 	Size     int64  `json:"size"`
 }
 type Job struct {
-	Started          int64         `json:"started,omitempty"`
-	Resumable        bool          `json:"resumable,omitempty"`
-	Resumes          int           `json:"resumes,omitempty"`
-	Filtered         int           `json:"filtered"`
-	ErrorKind        string        `json:"error_kind,omitempty"`
-	PreviewSame      int           `json:"preview_same"`
-	PreviewConflicts int           `json:"preview_conflicts"`
-	Preview          []PreviewItem `json:"preview,omitempty"`
-	Snapshot         *Rule         `json:"snapshot,omitempty"`
-	RetryDirs        []ScanDir     `json:"retry_dirs,omitempty"`
-	Trigger          string        `json:"trigger,omitempty"`
-	NonMediaFiles    int           `json:"non_media_files,omitempty"`
-	NonMediaSkipped  int           `json:"non_media_skipped,omitempty"`
-	SidecarsSkipped  int           `json:"sidecars_skipped,omitempty"`
-	Sidecars         int           `json:"sidecars,omitempty"`
-	ID               string        `json:"id"`
-	Rule             string        `json:"rule"`
-	Folder           string        `json:"folder"`
-	SourcePath       string        `json:"source_path"`
-	DryRun           bool          `json:"dry_run"`
-	Limit            int           `json:"limit"`
-	Status           string        `json:"status"`
-	Created          int64         `json:"created"`
-	Finished         int64         `json:"finished"`
-	Seen             int           `json:"seen"`
-	CreatedFiles     int           `json:"created_files"`
-	Skipped          int           `json:"skipped"`
-	Errors           int           `json:"errors"`
-	Message          string        `json:"message"`
-	Samples          []string      `json:"samples"`
-	Failures         []string      `json:"failures"`
-	CurrentPath      string        `json:"current_path,omitempty"`
-	RetryOf          string        `json:"retry_of,omitempty"`
-	RetriedBy        string        `json:"retried_by,omitempty"`
+	FullReconcile      bool          `json:"full_reconcile,omitempty"`
+	IncrementalSkipped int           `json:"incremental_skipped,omitempty"`
+	RecoveredFiles     int           `json:"recovered_files,omitempty"`
+	LocalIssues        int           `json:"local_issues,omitempty"`
+	Started            int64         `json:"started,omitempty"`
+	Resumable          bool          `json:"resumable,omitempty"`
+	Resumes            int           `json:"resumes,omitempty"`
+	Filtered           int           `json:"filtered"`
+	ErrorKind          string        `json:"error_kind,omitempty"`
+	PreviewSame        int           `json:"preview_same"`
+	PreviewConflicts   int           `json:"preview_conflicts"`
+	Preview            []PreviewItem `json:"preview,omitempty"`
+	Snapshot           *Rule         `json:"snapshot,omitempty"`
+	RetryDirs          []ScanDir     `json:"retry_dirs,omitempty"`
+	Trigger            string        `json:"trigger,omitempty"`
+	NonMediaFiles      int           `json:"non_media_files,omitempty"`
+	NonMediaSkipped    int           `json:"non_media_skipped,omitempty"`
+	SidecarsSkipped    int           `json:"sidecars_skipped,omitempty"`
+	Sidecars           int           `json:"sidecars,omitempty"`
+	ID                 string        `json:"id"`
+	Rule               string        `json:"rule"`
+	Folder             string        `json:"folder"`
+	SourcePath         string        `json:"source_path"`
+	DryRun             bool          `json:"dry_run"`
+	Limit              int           `json:"limit"`
+	Status             string        `json:"status"`
+	Created            int64         `json:"created"`
+	Finished           int64         `json:"finished"`
+	Seen               int           `json:"seen"`
+	CreatedFiles       int           `json:"created_files"`
+	Skipped            int           `json:"skipped"`
+	Errors             int           `json:"errors"`
+	Message            string        `json:"message"`
+	Samples            []string      `json:"samples"`
+	Failures           []string      `json:"failures"`
+	CurrentPath        string        `json:"current_path,omitempty"`
+	RetryOf            string        `json:"retry_of,omitempty"`
+	RetriedBy          string        `json:"retried_by,omitempty"`
 }
 type Store struct {
+	configMu       sync.RWMutex // Config writes and frozen scan admission/publication.
 	startupRestore restoreRuntime
 	// Immutable for this Store lifetime. A restored database starts without any
 	// background workers; clearing the durable gate requires a controlled restart.
@@ -242,6 +250,8 @@ func openStoreForStartup(dir string, recovery restoreRuntime) (result *Store, er
 	return s, nil
 }
 func (s *Store) saveAccount(a Account) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	raw, e := json.Marshal(a.Secrets)
 	if e != nil {
 		return e
@@ -302,6 +312,8 @@ func (s *Store) accounts() ([]Account, error) {
 	return out, rows.Err()
 }
 func (s *Store) saveRule(r Rule) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	p, e := json.Marshal(r)
 	if e != nil {
 		return e
@@ -403,6 +415,8 @@ func (s *Store) setting(id, def string) string {
 	return v
 }
 func (s *Store) setSetting(id, v string) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	_, e := s.db.Exec("INSERT INTO settings VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value", id, v)
 	return e
 }

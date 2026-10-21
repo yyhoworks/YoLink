@@ -179,9 +179,7 @@ $('inventory-all').addEventListener('change',e=>{document.querySelectorAll('[dat
 $('inventory-check').addEventListener('click',e=>action(e.currentTarget,()=>checkInventory(false)));$('inventory-cloud-check').addEventListener('click',e=>action(e.currentTarget,()=>checkInventory(true)));
 $('inventory-repair').addEventListener('click',e=>action(e.currentTarget,async()=>{
  if(!selectedOutputs.size)throw new Error('请先勾选需要修复的文件');
- const result=await api('/api/outputs/repair',{paths:[...selectedOutputs]});await loadInventory(inventoryData.page);
- if(result.failed){$('inventory-error').textContent='修复 '+result.restored+' 项，保留 '+result.preserved+' 项，'+result.failed+' 项未完成。'+result.items.filter(v=>v.status==='failed').slice(0,3).map(v=>v.note).join('；');$('inventory-error').hidden=false}
- toast('已修复 '+result.restored+' 项，保留 '+result.preserved+' 项'+(result.failed?'，'+result.failed+' 项未完成':''));
+ await previewChangeRepair([...selectedOutputs]);
 }));
 $('notice-read').addEventListener('click',e=>action(e.currentTarget,async()=>{await api('/api/notifications/read',{});await loadNotifications()}));
 $('records-filter-form').insertAdjacentHTML('afterend','<button id="record-context" class="text" hidden></button>');$('record-context').addEventListener('click',()=>{recordsContext={};updateRecordContext();recordsLoad()});

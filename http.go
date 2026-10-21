@@ -211,6 +211,10 @@ func (s *Server) handler() http.Handler {
 	}))
 	mux.HandleFunc("POST /api/settings", s.guard(s.settings))
 	mux.HandleFunc("POST /api/maintenance/links", s.guard(s.previewLinks))
+	mux.HandleFunc("GET /api/changes", s.guard(s.changeHistory))
+	mux.HandleFunc("POST /api/changes/preview", s.guard(s.previewChangeRepairHTTP))
+	mux.HandleFunc("POST /api/changes/{id}/apply", s.guard(s.applyChangeRepairHTTP))
+	mux.HandleFunc("GET /api/changes/{id}", s.guard(s.getChangeRepairHTTP))
 	mux.HandleFunc("POST /api/maintenance/migration", s.guard(s.previewMigration))
 	mux.HandleFunc("POST /api/maintenance/migration/scan", s.guard(s.scanInplace))
 	mux.HandleFunc("POST /api/maintenance/migration/inplace", s.guard(s.previewInplace))
@@ -549,13 +553,14 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 }
 
 type jobRequest struct {
-	Path       string `json:"path,omitempty"`
-	Kind       string `json:"kind,omitempty"`
-	Rule       string `json:"rule"`
-	Folder     string `json:"folder"`
-	SourcePath string `json:"source_path"`
-	DryRun     bool   `json:"dry_run"`
-	Limit      int    `json:"limit"`
+	FullReconcile bool   `json:"full_reconcile,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Rule          string `json:"rule"`
+	Folder        string `json:"folder"`
+	SourcePath    string `json:"source_path"`
+	DryRun        bool   `json:"dry_run"`
+	Limit         int    `json:"limit"`
 }
 
 func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
@@ -568,7 +573,11 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 		s.ingestEvent(w, r, in)
 		return
 	}
-	j, e := s.engine.enqueue(in.Rule, in.Folder, in.SourcePath, in.DryRun, in.Limit)
+	if in.FullReconcile && (in.Folder != "" || in.SourcePath != "" || in.DryRun || in.Limit != 0) {
+		fail(w, 400, "完整核对需要不限量的规则根目录任务")
+		return
+	}
+	j, e := s.engine.enqueueJob(in.Rule, in.Folder, in.SourcePath, in.DryRun, in.Limit, "manual", "", in.FullReconcile)
 	if e != nil {
 		fail(w, 400, e.Error())
 		return

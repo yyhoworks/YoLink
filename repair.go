@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 )
 
 // Restore only a missing, registered STRM whose exact bytes can be verified.
@@ -55,44 +54,5 @@ func (s *Server) repairOutputs(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "每次请选择 1 到 50 个文件")
 		return
 	}
-	s.maintenanceMu.Lock()
-	defer s.maintenanceMu.Unlock()
-	s.engine.mu.Lock()
-	defer s.engine.mu.Unlock()
-	var active int
-	if err := s.s.db.QueryRow("SELECT COUNT(*) FROM jobs WHERE status IN ('running','queued')").Scan(&active); err != nil || active > 0 {
-		fail(w, 409, "请等待生成任务结束后再修复缺失文件")
-		return
-	}
-	items := []object{}
-	seen := map[string]bool{}
-	restored, preserved, failed := 0, 0, 0
-	for _, key := range in.Paths {
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if r.Context().Err() != nil {
-			break
-		}
-		created, err := s.restoreMissingOutput(key)
-		if err != nil {
-			failed++
-			items = append(items, object{"path": key, "status": "failed", "note": err.Error()})
-			continue
-		}
-		if created {
-			restored++
-		} else {
-			preserved++
-		}
-		status, note := s.inspectOutput(r.Context(), key, false)
-		_, err = s.s.db.Exec("INSERT INTO output_details(path,rule,job,created,checked,status,note) VALUES(?,'','',0,?,?,?) ON CONFLICT(path) DO UPDATE SET checked=excluded.checked,status=excluded.status,note=excluded.note", key, time.Now().UnixMilli(), status, note)
-		if err != nil {
-			failed++
-			note = "文件处理完成，体检结果保存失败，请重新体检"
-		}
-		items = append(items, object{"path": key, "status": status, "note": note, "restored": created})
-	}
-	jsonOut(w, 200, object{"items": items, "restored": restored, "preserved": preserved, "failed": failed})
+	fail(w, 409, "请先调用 /api/changes/preview 预览，再确认该预览版本；旧修复接口未执行文件操作")
 }

@@ -1,9 +1,12 @@
 # Incremental synchronization and controlled change repair
 
-Status: design for the next milestone after manual backup/recovery. No provider
+Status: approved design with reviewed corrections, implemented in the next
+milestone after manual backup/recovery; final implementation acceptance tracked
+separately. No provider
 delta API or cloud mutation is implemented by this document. Preserve the
 Go/SQLite/static frontend/single-container architecture and existing task engine.
-This design requires independent gpt-6-astra/high review before implementation.
+Independent gpt-6-astra/high design review and correction verification preceded
+implementation. The implementation/correction review is a separate gate.
 
 ## Capability and operator contract
 

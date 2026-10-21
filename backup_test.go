@@ -363,7 +363,7 @@ func TestBackupBoundsEveryConsumedCredentialAndSetting(t *testing.T) {
 func TestBackupSchemaVersionsAndCancellation(t *testing.T) {
 	for version := 1; version <= currentSchemaVersion; version++ {
 		db := schemaTestDB(t)
-		migrations := []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics}
+		migrations := []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics, migrateScanHistory}
 		if err := applySchemaMigrations(db, migrations[:version]); err != nil {
 			t.Fatal(err)
 		}

@@ -55,6 +55,11 @@ func TestRetryUsesSanitizedPathsFromCheckpointAndFailures(t *testing.T) {
 				}
 			}
 			if mode == "legacy_checkpoint" || mode == "resume_legacy_checkpoint" {
+				// A real v4 checkpoint predates scan history entirely. Remove the
+				// new-format run rather than reopening a deliberately failed one.
+				if _, err := f.s.db.Exec("DELETE FROM scan_runs WHERE id=?", old.ID); err != nil {
+					t.Fatal(err)
+				}
 				if _, err := f.s.db.Exec(`UPDATE job_checkpoints SET payload=json_set(payload,'$.Current.relative','Season:1') WHERE job=?`, old.ID); err != nil {
 					t.Fatal(err)
 				}

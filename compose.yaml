@@ -1,7 +1,7 @@
 name: yolink
 services:
   yolink:
-    image: yolink:0.13.0
+    image: yolink:0.14.0
     container_name: yolink
     build:
       context: .

@@ -12,7 +12,7 @@ type schemaRunner interface {
 	Query(string, ...any) (*sql.Rows, error)
 }
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 const baseSchema = `CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, payload TEXT NOT NULL, secret BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS rules(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
@@ -40,7 +40,7 @@ func migrateLegacySchema(tx *sql.Tx) error {
 }
 
 func migrateSchema(db *sql.DB) error {
-	return applySchemaMigrations(db, []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics})
+	return applySchemaMigrations(db, []func(*sql.Tx) error{migrateLegacySchema, migrateCompactCheckpoints, migrateAccountHealth, migrateDiagnostics, migrateScanHistory})
 }
 
 func migrateDiagnostics(tx *sql.Tx) error {

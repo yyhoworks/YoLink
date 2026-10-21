@@ -180,6 +180,8 @@ func (s *Server) accountMutation(w http.ResponseWriter, r *http.Request, remove,
 	defer s.engine.mu.Unlock()
 	s.s.mu.Lock()
 	defer s.s.mu.Unlock()
+	s.s.configMu.Lock()
+	defer s.s.configMu.Unlock()
 	if _, e := s.s.account(id); e != nil {
 		fail(w, 404, "网盘账号不存在")
 		return

@@ -16,6 +16,7 @@ export function fixtureAPI(path) {
   };
   if (path === '/api/notifications') return { items: [] };
   if (path === '/api/restore/status') return { supported: true, restricted: false, runtime: {}, pending: null, upload: null };
+  if(path==='/api/changes')return{runs:[],items:[],plans:[],total:0,page:1,pages:0,last_full:0};
   if (path === '/api/records') return {
     items: [{ id: 'fixture-record', kind: 'generation', event: 'strm', outcome: 'created',
       name: '<Fixture & movie>.mkv', media: 'fixture-media', time: now, path: '/synthetic/movie.mkv', output: '', note: 'Synthetic smoke record' }],

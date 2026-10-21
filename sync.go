@@ -26,6 +26,7 @@ func init() {
 
 type Engine struct {
 	companionDownload func(context.Context, PlaybackTarget) ([]byte, error)
+	scanFault         func(string) error // deterministic crash/interleaving verification
 	subtitleDownload  func(context.Context, PlaybackTarget) ([]byte, error)
 	s                 *Store
 	clouds            Clouds
@@ -122,7 +123,7 @@ func (e *Engine) enqueue(ruleID, folder, sourcePath string, dry bool, limit int,
 	}
 	return e.enqueueJob(ruleID, folder, sourcePath, dry, limit, trigger, retry)
 }
-func (e *Engine) enqueueJob(ruleID, folder, sourcePath string, dry bool, limit int, trigger, retryOf string) (Job, error) {
+func (e *Engine) enqueueJob(ruleID, folder, sourcePath string, dry bool, limit int, trigger, retryOf string, full ...bool) (Job, error) {
 	if e.s.restoreRestricted {
 		return Job{}, errors.New("恢复后尚未确认，请先核对恢复资料并重新启动")
 	}
@@ -166,6 +167,9 @@ func (e *Engine) enqueueJob(ruleID, folder, sourcePath string, dry bool, limit i
 		return Job{}, errors.New("任务队列已满，请稍后重试")
 	}
 	j := Job{Resumable: true, Snapshot: &r, ID: randomID(), Rule: ruleID, Folder: folder, SourcePath: sourcePath, DryRun: dry, Limit: limit, Status: "queued", Created: time.Now().Unix(), Samples: []string{}, Trigger: trigger}
+	if len(full) > 0 && full[0] {
+		j.FullReconcile = true
+	}
 	if retryOf != "" {
 		previous, er := e.s.job(retryOf)
 		if er != nil {
@@ -312,6 +316,7 @@ func (e *Engine) run(id string) {
 	e.s.mu.Unlock()
 	a, err := e.s.account(r.Account)
 	if err == nil {
+		ctx = context.WithValue(ctx, expectedAccountRevisionKey{}, expectedAccountRevision{ID: a.ID, Revision: a.Revision})
 		err = e.verifyScope(ctx, r, j.Folder, j.SourcePath)
 	}
 	if err == nil {
@@ -335,6 +340,9 @@ func (e *Engine) run(id string) {
 			j.Message = "已达到本次生成上限"
 		} else {
 			j.Message = "扫描完成"
+			if j.LocalIssues > 0 {
+				j.Message = fmt.Sprintf("扫描完成，%d 项本地输出待核对", j.LocalIssues)
+			}
 		}
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -366,6 +374,9 @@ func (e *Engine) run(id string) {
 	}
 	if saveErr := e.saveProgress(j); saveErr == nil && (j.Status == "completed" || j.Status == "cancelled") {
 		_, _ = e.s.db.Exec("DELETE FROM job_checkpoints WHERE job=?", j.ID)
+	}
+	if j.Status != "interrupted" && j.Status != "completed" {
+		_, _ = e.s.db.Exec("UPDATE scan_runs SET status=? WHERE id=? AND status='active'", j.Status, j.ID)
 	}
 }
 func (e *Engine) verifyScope(ctx context.Context, r Rule, folder, sourcePath string) error {
@@ -403,6 +414,9 @@ func (e *Engine) verifyScope(ctx context.Context, r Rule, folder, sourcePath str
 }
 func contentHash(b []byte) string { x := sha256.Sum256(b); return hex.EncodeToString(x[:]) }
 func (e *Engine) publish(dest, mid string, content []byte) (bool, error) {
+	return e.publishOutput(dest, mid, content, true)
+}
+func (e *Engine) publishOutput(dest, mid string, content []byte, register bool) (bool, error) {
 	root, relative, key, locationErr := e.outputLocation(dest)
 	if locationErr != nil {
 		return false, locationErr
@@ -427,7 +441,9 @@ func (e *Engine) publish(dest, mid string, content []byte) (bool, error) {
 		if n != int64(len(content)) || hex.EncodeToString(digest.Sum(nil)) != contentHash(content) {
 			return false, errors.New("已有文件内容不同，已保留：" + dest)
 		}
-		_, er = e.s.db.Exec("INSERT INTO outputs VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash", dest, mid, contentHash(content))
+		if register {
+			_, er = e.s.db.Exec("INSERT INTO outputs VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash", dest, mid, contentHash(content))
+		}
 		return false, er
 	}
 	if !os.IsNotExist(er) {
@@ -454,6 +470,9 @@ func (e *Engine) publish(dest, mid string, content []byte) (bool, error) {
 	// Both paths are confined by os.Root, including symlink resolution.
 	if er = root.Link(temp, relative); er != nil {
 		return false, errors.New("发布文件失败（目标已存在，或卷不支持硬链接）：" + dest)
+	}
+	if !register {
+		return true, nil
 	}
 	_, er = e.s.db.Exec("INSERT INTO outputs VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash", dest, mid, contentHash(content))
 	if er != nil {

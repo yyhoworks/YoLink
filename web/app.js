@@ -213,6 +213,7 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   scheduleRefresh();
   if (next === "files" && loadFiles) ensureCloudFiles();
   if (next === "records") recordsOpen();
+  if (next === "maintenance" && typeof changesOpen === "function") changesOpen();
   if (typeof consoleNav === "function") consoleNav(next, context);
   document.title = "YoLink · " + $("location").textContent;
   if (previousView !== next) window.scrollTo({ top: 0, behavior: "instant" });

@@ -44,7 +44,7 @@ function nav(next,loadFiles=true,context={},options={}){
  if(next==='home')generationTab(requested==='tasks'||options.restore&&requested==='home'?'status':['config','directories'].includes(requested)?'config':localStorage.getItem('yolink-gen-tab')||generationTarget,{write:false});
  writeRoute(next==='home'&&genTab==='config'?'config':next,options.replace);routeReady=true;
  render();scheduleRefresh();
- if(next==='files'&&loadFiles)ensureCloudFiles();if(next==='records')recordsOpen();if(typeof consoleNav==='function')consoleNav(next,context);document.title='YoLink · '+$('location').textContent;if(previousView!==next)window.scrollTo({top:0,behavior:'instant'});icons();
+ if(next==='files'&&loadFiles)ensureCloudFiles();if(next==='records')recordsOpen();if(next==='maintenance'&&typeof changesOpen==='function')changesOpen();if(typeof consoleNav==='function')consoleNav(next,context);document.title='YoLink · '+$('location').textContent;if(previousView!==next)window.scrollTo({top:0,behavior:'instant'});icons();
 }
 function refreshDelay(){
  const live=(view==='dashboard'||view==='home'&&genTab==='status')&&state.jobs.some(genActive);

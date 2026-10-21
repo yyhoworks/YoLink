@@ -44,6 +44,9 @@ function renderGeneration(){
 function renderGenerationRules(){renderRuleConsole()}
 function genJobDetails(j){
  const lines=[...(j.failures||[]),...(j.samples||[]).map(x=>'输出：'+x)];
+ if(j.incremental_skipped)lines.unshift('观测及本地核验一致，省去重复生成 '+j.incremental_skipped+' 项；网盘目录仍完整读取');
+ if(j.recovered_files)lines.unshift('中断后核验并完成登记 '+j.recovered_files+' 项，未推断此前的写入次数');
+ if(j.local_issues)lines.unshift('本地输出待核对 '+j.local_issues+' 项，可前往迁移维护查看变更');
  return `<details class="job-details" data-job-detail="${esc(j.id)}"><summary>查看详情</summary><p>${esc(j.message||'等待扫描')}</p><ul>${lines.map(x=>`<li><code>${esc(x)}</code></li>`).join('')}</ul>${jobExtraDetails(j)}<code>规则 ID：${esc(j.rule)}</code></details>`;
 }
 function renderGenerationJobs(active,failures){
@@ -61,11 +64,13 @@ function renderGenerationJobs(active,failures){
 function generationEditRule(id=null,accountID=''){
  const available=state.accounts.filter(a=>!a.disabled);
  if(!available.length){nav('accounts');toast('先添加并启用一个网盘账号');return}
- genDraft=id?{...ruleBy(id)}:{id:'',account:accountID||available[0].id,folder:'',source_path:'',output:'',interval:1800,enabled:false};
+ genDraft=id?{...ruleBy(id)}:{id:'',account:accountID||available[0].id,folder:'',source_path:'',output:'',interval:1800,enabled:false,incremental:true};
  nav('config');genEl('gen-rule-form').hidden=false;genEl('gen-editor-title').textContent=id?'编辑目录规则':'新增目录规则';
  genSetOptions(genEl('gen-rule-account'),state.accounts.filter(a=>!a.disabled||a.id===genDraft.account).map(a=>({id:a.id,label:a.name+(a.disabled?'（已停用）':'')})),genDraft.account);
  genEl('gen-rule-source').value=genDraft.source_path;genEl('gen-rule-output').value=genOutputPath(genDraft.output);genEl('gen-rule-name').value=id?genDraft.name:'';genEl('gen-rule-enabled').checked=genDraft.enabled;genEl('gen-copy-subtitles').checked=!!genDraft.copy_subtitles;genEl('gen-copy-nonmedia').checked=!!genDraft.copy_non_media;genEl('gen-rule-interval').value=Math.round(genDraft.interval/60)||30;genEl('gen-editor-result').textContent='';generationScheduleSummary();loadRuleExtras(genDraft);
  genEl('gen-rule-form').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+ if(genEl('gen-incremental'))genEl('gen-incremental').checked=!!genDraft.incremental;
+ if(genEl('scene-select')){genEl('scene-select').value=genDraft.template||'';genEl('scene-select').dispatchEvent(new Event('change'))}
 }
 function genCurrent(){return genTrail.at(-1)}
 function genRenderTrail(){
@@ -104,6 +109,7 @@ async function generationSave(event){
   const interval=Number(genEl('gen-rule-interval').value);if(!Number.isInteger(interval)||interval<1||interval>10080)throw new Error('检查间隔应为 1 到 10080 分钟');
   const leaf=genDraft.source_path.split('/').filter(Boolean).at(-1)||accountBy(genDraft.account)?.name||'媒体';
   const body={...genDraft,...readRuleExtras(),account:genEl('gen-rule-account').value,name:genEl('gen-rule-name').value.trim()||leaf,output:genEl('gen-rule-output').value.trim(),copy_subtitles:genEl('gen-copy-subtitles').checked,copy_non_media:genEl('gen-copy-nonmedia').checked,enabled:genEl('gen-rule-enabled').checked,interval:interval*60};
+  body.incremental=!!genEl('gen-incremental')?.checked;
   const saved=await api('/api/rules',body);genEl('gen-rule-form').hidden=true;genDraft=null;await refresh();
   if(button.value==='generate')await generationRun(saved.id);else{toast('目录规则已保存');nav('config')}
  });

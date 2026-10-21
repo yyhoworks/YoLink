@@ -132,6 +132,8 @@ func (s *Server) removeRule(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "该目录还有生成任务，请先取消或等待完成")
 		return
 	}
+	s.s.configMu.Lock()
+	defer s.s.configMu.Unlock()
 	if _, e := s.s.db.Exec("DELETE FROM rules WHERE id=?", id); e != nil {
 		fail(w, 500, "移除目录规则失败")
 		return

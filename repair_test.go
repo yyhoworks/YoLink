@@ -90,11 +90,11 @@ func TestMissingOutputRepairAPIIsBoundedAndBlocksActiveGeneration(t *testing.T) 
 	if err := os.Remove(filepath.Join(f.output, filepath.FromSlash(key))); err != nil {
 		t.Fatal(err)
 	}
-	if status := request(string(body), true); status != 200 {
+	if status := request(string(body), true); status != 409 {
 		t.Fatal(status)
 	}
-	if _, err := os.Stat(filepath.Join(f.output, filepath.FromSlash(key))); err != nil {
-		t.Fatal("API did not restore the selected file", err)
+	if _, err := os.Stat(filepath.Join(f.output, filepath.FromSlash(key))); !os.IsNotExist(err) {
+		t.Fatal("legacy API bypassed preview", err)
 	}
 	if err := f.s.saveJob(Job{ID: "pending-repair-test", Status: "queued"}); err != nil {
 		t.Fatal(err)
