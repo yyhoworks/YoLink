@@ -2,7 +2,7 @@
 
 面向 NAS 的网盘 STRM 生成与播放入口服务。直接接入移动云盘、夸克、阿里云盘和 115；Go + SQLite + 内嵌网页，单容器运行，默认端口 **8796**。
 
-当前源码版本：**0.14.1**。本仓库作为邀请内测的私有源码仓库，仅受邀 GitHub 账号可以访问。软件许可证仍为 AGPL-3.0，详见下方许可说明。
+当前版本：**0.14.1**。源码按 AGPL-3.0 公开发布，镜像位于 [Docker Hub](https://hub.docker.com/r/yyhoworks/yolink)，程序包与更新说明见 [GitHub Releases](https://github.com/yyhoworks/YoLink/releases)。
 
 ## 主要功能
 
@@ -19,7 +19,7 @@
 
 ## Docker 启动
 
-获得仓库访问权限后，在运行 Docker 的主机上执行：
+在运行 Docker 的主机上执行：
 
 ```sh
 git clone https://github.com/yyhoworks/YoLink.git
@@ -27,14 +27,14 @@ cd YoLink
 cp .env.example .env
 mkdir -p ./data ./strm-test
 sudo chown -R 10001:10001 ./data ./strm-test
-docker compose build
+docker compose pull
 docker compose run --rm --no-deps yolink check-permissions
-docker compose up -d
+docker compose up -d --no-build
 ```
 
 以上使用专属的默认目录和 UID/GID；root 终端省略 `sudo`。如修改 `.env` 中的输出目录或 `YOLINK_UID`/`YOLINK_GID`，请同步调整实际目录权限后再启动。NAS 共享目录可通过 ACL 授权；不要直接对共享媒体库递归改属主。旧版本升级先按[升级与备份](QUICKSTART.md#升级与备份)处理已有文件权限。
 
-此仓库默认使用 `Dockerfile` 从源码构建，不要求将预编译程序提交到 Git。首次构建需要访问 Go 模块与容器基础镜像源。私有镜像分发尚未在本仓库配置。
+Compose 默认使用 `yyhoworks/yolink:0.14.1`。当前官方镜像支持 `linux/amd64`；Release 同时提供 Linux amd64、arm64 程序。需要自行构建镜像时，使用支持 BuildKit/Buildx 的 Docker，运行 `docker compose build` 后再启动；源码构建需要访问 Go 模块与基础镜像源。
 
 访问 `http://你的NAS-IP:8796`。首次随机管理员密码保存在项目数据目录的 `data/initial-admin-password.txt`。登录后依次添加网盘凭据、填写播放器可访问的服务地址、选择目录并配置生成规则。建议先预览或试生成少量文件。
 
@@ -69,8 +69,8 @@ docker compose up -d
 
 “已返回 302”或有限取流自检成功不等于播放器完成解码、拖动或全片播放；实际播放器需要单独验证。生成文件默认不覆盖不同内容，也不自动删除用户文件。
 
-## 许可与私有分发
+## 许可与分发
 
 项目按 [GNU AGPL-3.0](LICENSE) 分发，包含从 OpenList 改编的实现，来源及其他依赖许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。向获得镜像/程序的用户提供此版本的对应源码，并遵守许可证对修改、分发和网络交互的要求。
 
-仓库访问权限用于管理官方内测邀请，不替代许可证，也不取消接收者按许可证获得的权利。部署者自己的网盘账号、数据库、密钥、访问令牌、备份和私人部署记录不属于仓库内容。
+部署者自己的网盘账号、数据库、密钥、访问令牌、备份和私人部署记录不属于仓库内容。请勿将这些资料上传到 Issue、讨论或公开日志。

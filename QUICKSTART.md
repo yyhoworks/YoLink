@@ -2,7 +2,7 @@
 
 ## 启动
 
-需要 Docker Engine 和 Docker Compose。克隆私有仓库需要已获访问权限的 GitHub 账号。
+需要 Docker Engine 和 Docker Compose。默认拉取公开的 Linux amd64 镜像；其他架构可使用 Release 程序或自行构建。
 
 ```sh
 git clone https://github.com/yyhoworks/YoLink.git
@@ -10,9 +10,9 @@ cd YoLink
 cp .env.example .env
 mkdir -p ./data ./strm-test
 sudo chown -R 10001:10001 ./data ./strm-test
-docker compose build
+docker compose pull
 docker compose run --rm --no-deps yolink check-permissions
-docker compose up -d
+docker compose up -d --no-build
 ```
 
 这些命令使用默认的专属目录和 UID/GID；root 终端可省略 `sudo`。修改 `.env` 的 `STRMLINK_OUTPUT_DIR` 或 `YOLINK_UID`/`YOLINK_GID` 后，需要先建立实际挂载目录，按所选运行用户授予权限，再执行检查与启动。Compose 不会自动创建宿主机目录，避免意外建立 root 所有且服务不可写的目录。
@@ -65,9 +65,9 @@ git pull --ff-only
 docker compose stop yolink
 # 默认专属目录；自定义路径/UID/GID 时，改用实际设置。
 sudo chown -R 10001:10001 ./data ./strm-test
-docker compose build
+docker compose pull
 docker compose run --rm --no-deps yolink check-permissions
-docker compose up -d
+docker compose up -d --no-build
 docker compose ps
 docker compose logs --tail=80 yolink
 ```
