@@ -48,10 +48,11 @@ type scanRun struct {
 }
 
 type scanBaseline struct {
-	Scope    string `json:"scope"`
-	Run      string `json:"run"`
-	Identity string `json:"identity"`
-	Compare  bool   `json:"compare"`
+	Publication int64  `json:"publication"`
+	Scope       string `json:"scope"`
+	Run         string `json:"run"`
+	Identity    string `json:"identity"`
+	Compare     bool   `json:"compare"`
 }
 
 func scanContentIdentity(v scanIdentity) string {
@@ -65,7 +66,7 @@ func scanCoveredBaselines(tx *sql.Tx, identity scanIdentity) ([]scanBaseline, er
 	// Each publication assigns a rowid greater than every surviving pointer in
 	// the same transaction. This orders sibling observations even after a clock
 	// rollback or an older run finishing later. A parent retires its descendants.
-	rows, err := tx.Query(`SELECT b.scope,b.run,b.identity,r.payload,r.status FROM scan_baselines b JOIN scan_runs r ON r.id=b.run WHERE b.rule=? ORDER BY b.rowid`, identity.Rule.ID)
+	rows, err := tx.Query(`SELECT b.rowid,b.scope,b.run,b.identity,r.payload,r.status FROM scan_baselines b JOIN scan_runs r ON r.id=b.run WHERE b.rule=? ORDER BY b.rowid`, identity.Rule.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +76,7 @@ func scanCoveredBaselines(tx *sql.Tx, identity scanIdentity) ([]scanBaseline, er
 	for rows.Next() {
 		var b scanBaseline
 		var raw, status string
-		if err = rows.Scan(&b.Scope, &b.Run, &b.Identity, &raw, &status); err != nil {
+		if err = rows.Scan(&b.Publication, &b.Scope, &b.Run, &b.Identity, &raw, &status); err != nil {
 			return nil, err
 		}
 		if !scanSourceCovered(identity.Source, b.Scope) && !scanSourceCovered(b.Scope, identity.Source) {
@@ -451,31 +452,28 @@ func (session *scanSession) publish(ctx context.Context) error {
 	previous := session.Run.Previous
 	// Overlay complete subtrees, including their negative observations, before
 	// retiring their pointers. Work stays in SQLite rather than a large Go map.
-	if _, err = tx.Exec("CREATE TEMP TABLE scan_compare(remote TEXT PRIMARY KEY,source TEXT NOT NULL,payload TEXT NOT NULL)"); err != nil {
+	if err = buildScanComparisonTx(tx, session.Run.Identity, covered, ""); err != nil {
 		return err
-	}
-	for _, b := range covered {
-		if !b.Compare {
-			continue
-		}
-		prefix := strings.TrimSuffix(b.Scope, "/") + "/"
-		if _, err = tx.Exec("DELETE FROM scan_compare WHERE source=? OR substr(source,1,length(?))=?", b.Scope, prefix, prefix); err != nil {
-			return err
-		}
-		comparePrefix := strings.TrimSuffix(session.Run.Identity.Source, "/") + "/"
-		if _, err = tx.Exec(`INSERT INTO scan_compare SELECT remote,source,payload FROM scan_entries WHERE run=? AND json_extract(payload,'$.entry.dir')=0 AND (source=? OR substr(source,1,length(?))=?) ON CONFLICT(remote) DO UPDATE SET source=excluded.source,payload=excluded.payload`, b.Run, session.Run.Identity.Source, comparePrefix, comparePrefix); err != nil {
-			return err
-		}
 	}
 	_, err = tx.Exec(`INSERT INTO scan_changes SELECT n.run,n.remote,CASE WHEN o.remote IS NULL THEN 'added' WHEN o.source<>n.source THEN 'moved' ELSE 'metadata' END,COALESCE(o.payload,''),n.payload FROM scan_entries n LEFT JOIN scan_compare o ON o.remote=n.remote WHERE n.run=? AND json_extract(n.payload,'$.entry.dir')=0 AND (o.remote IS NULL OR o.payload<>n.payload)`, session.Run.ID)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO scan_changes SELECT ?,o.remote,'source_absent',o.payload,'' FROM scan_compare o LEFT JOIN scan_entries n ON n.run=? AND n.remote=o.remote WHERE n.remote IS NULL`, session.Run.ID, session.Run.ID)
+	_, err = tx.Exec(`INSERT INTO scan_changes SELECT ?,o.remote,'source_absent',o.payload,'' FROM scan_compare o LEFT JOIN scan_entries n ON n.run=? AND n.remote=o.remote WHERE n.remote IS NULL AND json_extract(o.payload,'$.entry.dir')=0`, session.Run.ID, session.Run.ID)
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec("DROP TABLE scan_compare"); err != nil {
+	if session.Run.Identity.Source != session.Run.Identity.Rule.SourcePath {
+		// Carry the retired positive's publication, never the empty run's
+		// newer time/sequence: an intervening sibling positive stays valid.
+		if _, err = tx.Exec(`INSERT INTO scan_tombstones SELECT o.remote,o.source,o.payload,o.publication FROM scan_compare o LEFT JOIN scan_entries n ON n.run=? AND n.remote=o.remote WHERE n.remote IS NULL ON CONFLICT(remote) DO UPDATE SET source=excluded.source,payload=excluded.payload,publication=excluded.publication WHERE excluded.publication>scan_tombstones.publication`, session.Run.ID); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO scan_changes SELECT ?,t.remote,'source_tombstone',json_object('observation',json(t.payload),'publication',t.publication),'' FROM scan_tombstones t WHERE NOT EXISTS (SELECT 1 FROM scan_entries n WHERE n.run=? AND n.remote=t.remote)`, session.Run.ID, session.Run.ID); err != nil {
+			return err
+		}
+	}
+	if err = dropScanComparisonTx(tx); err != nil {
 		return err
 	}
 	completed := time.Now().Unix()

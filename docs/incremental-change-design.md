@@ -73,6 +73,16 @@ full-root pass reconciles all subtrees and removes obsolete scope pointers in
 one transaction. Schedule a normal full reconciliation at a bounded interval;
 persist its last successful completion so repeated failures stay visible.
 
+Pointer rowids are assigned above every surviving pointer in the publication
+transaction, independent of wall-clock or admission order. Retained scoped
+baselines carry bounded per-identity tombstones with the publication of the
+positive observation they retired. Replacing a newer positive scope with
+successive empty snapshots must not revive an older sibling observation.
+Tombstones suppress only older/equal positive publications, include directory
+identity transitions, remain hidden from user-facing history counts, and are
+discarded when a root scan atomically retires every older covered pointer.
+Repair and baseline publication share this same comparison implementation.
+
 ## Generation and local verification
 
 New/changed entries pass through the existing ingest/filter/media identity/output

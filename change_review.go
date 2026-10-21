@@ -85,7 +85,7 @@ func (s *Server) changeHistory(w http.ResponseWriter, r *http.Request) {
 	total := 0
 	lastFull := int64(0)
 	if selectedStatus != "" && selectedStatus != "active" && selectedStatus != "quarantined" {
-		const changesWhere = "run=? AND (?='complete' OR kind IN ('local_missing','local_modified','outdated'))"
+		const changesWhere = "run=? AND kind<>'source_tombstone' AND (?='complete' OR kind IN ('local_missing','local_modified','outdated'))"
 		if err = s.s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM scan_changes WHERE "+changesWhere, run, selectedStatus).Scan(&total); err != nil {
 			fail(w, 500, "变更数量读取失败")
 			return
@@ -202,24 +202,17 @@ func (s *Server) prepareChangeRepairItemTx(tx *sql.Tx, key string) (item changeR
 	if err != nil {
 		return item, err
 	}
-	covered := false
-	var observed Entry
-	for _, b := range item.Baselines {
-		if b.Compare && scanSourceCovered(b.Scope, item.Media.Path) {
-			var observation string
-			var v scanObservation
-			e = tx.QueryRow("SELECT payload FROM scan_entries WHERE run=? AND remote=? AND source=? AND done=1", b.Run, item.Media.RemoteID, item.Media.Path).Scan(&observation)
-			covered = e == nil && json.Unmarshal([]byte(observation), &v) == nil && !v.Entry.Dir && v.Entry.Name == item.Media.Name
-			observed = v.Entry
-		}
+	winner, e := repairScanObservationTx(tx, item.Identity, item.Baselines, item.Media.RemoteID)
+	if e != nil {
+		return item, e
 	}
-	if !covered {
-		return item, errors.New("缺少相同配置的完整扫描基线，请先扫描此规则")
+	if winner.Source != item.Media.Path || winner.Entry.Dir || winner.Entry.Name != item.Media.Name {
+		return item, errors.New("缺少相同路径的最新完整观测，来源可能已移动，请先核对规则")
 	}
 	// Scanning filters the original final name under sanitized parent paths,
 	// using the latest covered entry size rather than an older media index.
-	filterPath := path.Join(path.Dir(relative), observed.Name)
-	if rule.Filter.excluded(observed.Name, filterPath) || !rule.Filter.media(observed) {
+	filterPath := path.Join(path.Dir(relative), winner.Entry.Name)
+	if rule.Filter.excluded(winner.Entry.Name, filterPath) || !rule.Filter.media(winner.Entry) {
 		return item, errors.New("当前规则已排除此媒体，本次仅供核对")
 	}
 	if item.Hash != contentHash([]byte(mediaContent(s.s, item.Media, item.Identity.Base))) {

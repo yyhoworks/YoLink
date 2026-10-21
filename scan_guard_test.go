@@ -283,3 +283,174 @@ func TestScanHistorySiblingMovesUseLatestCoveredObservation(t *testing.T) {
 		}
 	}
 }
+
+func TestChangeRepairRejectsOlderPathAfterSiblingMoveAndMissingOutput(t *testing.T) {
+	f := strongScanFixture(t)
+	entry := Entry{ID: "movie", Name: "movie.mkv", Size: 12, Modified: "v1"}
+	f.c.dirs = map[string][]Entry{"root": {{ID: "A", Name: "A", Dir: true}, {ID: "Z", Name: "Z", Dir: true}}, "A": {}, "Z": {entry}}
+	if j := generate(t, f, false, 0); j.Status != "completed" {
+		t.Fatal(j)
+	}
+	scan := func(scope string) Job {
+		t.Helper()
+		j, err := f.e.enqueue(f.r.ID, scope, "/media/"+scope, false, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j = finish(t, f, j)
+		if j.Status != "completed" {
+			t.Fatal(j)
+		}
+		return j
+	}
+	f.c.dirs["A"], f.c.dirs["Z"] = []Entry{entry}, nil
+	scan("A")
+	if err := os.Remove(filepath.Join(f.output, "test/media/Z/movie.strm")); err != nil {
+		t.Fatal(err)
+	}
+	f.c.dirs["A"], f.c.dirs["Z"] = nil, []Entry{entry}
+	if j := scan("Z"); j.LocalIssues != 1 || j.CreatedFiles != 0 {
+		t.Fatal("missing output was not preserved", j)
+	}
+	file := filepath.Join(f.output, "test/media/A/movie.strm")
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	srv, _, _ := testToolsServer(t, f, f.c)
+	_, _, key, _ := f.e.outputLocation("test/media/A/movie.strm")
+	p, err := srv.previewChangeRepair(t.Context(), []string{key})
+	if err != nil || len(p.Items) != 1 || p.Items[0].Ready || !strings.Contains(p.Items[0].Note, "最新完整观测") {
+		t.Fatal("older sibling path became repairable", p, err)
+	}
+	if _, err = os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("preview recreated moved source", err)
+	}
+	// Replacing the newest positive scope with repeated empty snapshots must
+	// not revive the older sibling's positive observation.
+	f.c.dirs["Z"] = nil
+	for i := 0; i < 2; i++ {
+		empty := scan("Z")
+		if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM scan_changes WHERE run=? AND kind='source_tombstone'", empty.ID); n != 1 {
+			t.Fatal("retired identity was not carried", n)
+		}
+		result := changeHistoryResult(t, f, "rule=rule&run="+empty.ID)
+		if raw, er := json.Marshal(result); er != nil || strings.Contains(string(raw), "source_tombstone") || i == 1 && result["total"] != float64(0) {
+			t.Fatal("internal absence entered history/pagination", result, er)
+		}
+		p, err = srv.previewChangeRepair(t.Context(), []string{key})
+		if err != nil || p.Items[0].Ready {
+			t.Fatal("empty scope resurrected the older sibling", i, p, err)
+		}
+	}
+	root := generate(t, f, false, 0)
+	if root.Status != "completed" {
+		t.Fatal(root)
+	}
+	if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM scan_changes WHERE run=? AND remote='movie' AND kind='source_absent'", root.ID); n != 0 {
+		t.Fatal("root repeated absence using a superseded sibling", n)
+	}
+}
+
+func TestScanTombstonesPreserveNewerSiblingAndDirectoryRetirement(t *testing.T) {
+	for _, mode := range []string{"newer-sibling", "directory-retired"} {
+		t.Run(mode, func(t *testing.T) {
+			f := strongScanFixture(t)
+			entry := Entry{ID: "movie", Name: "movie.mkv", Size: 12, Modified: "v1"}
+			f.c.dirs = map[string][]Entry{"root": {{ID: "A", Name: "A", Dir: true}, {ID: "Z", Name: "Z", Dir: true}}, "A": {}, "Z": {entry}}
+			if mode == "directory-retired" {
+				f.c.dirs["A"], f.c.dirs["Z"] = []Entry{entry}, nil
+			}
+			generate(t, f, false, 0)
+			scan := func(scope string) Job {
+				t.Helper()
+				j, err := f.e.enqueue(f.r.ID, scope, "/media/"+scope, false, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				j = finish(t, f, j)
+				if j.Status != "completed" {
+					t.Fatal(j)
+				}
+				return j
+			}
+			if mode == "newer-sibling" {
+				f.c.dirs["A"], f.c.dirs["Z"] = []Entry{entry}, nil
+				scan("A")
+			} else {
+				directory := entry
+				directory.Dir = true
+				f.c.dirs["A"], f.c.dirs["Z"] = nil, []Entry{directory}
+				scan("Z")
+				f.c.dirs["Z"] = nil
+			}
+			scan("Z")
+			scan("Z")
+			if err := os.Remove(filepath.Join(f.output, "test/media/A/movie.strm")); err != nil {
+				t.Fatal(err)
+			}
+			srv, _, _ := testToolsServer(t, f, f.c)
+			_, _, key, _ := f.e.outputLocation("test/media/A/movie.strm")
+			preview, err := srv.previewChangeRepair(t.Context(), []string{key, key})
+			wantReady := mode == "newer-sibling"
+			if err != nil || len(preview.Items) < 1 || preview.Items[0].Ready != wantReady {
+				t.Fatal("tombstone authority used the empty run instead of retired positive", preview, err)
+			}
+			// A fresh positive observation supersedes a prior absence normally.
+			if mode == "directory-retired" {
+				f.c.dirs["A"] = []Entry{entry}
+				scan("A")
+				preview, err = srv.previewChangeRepair(t.Context(), []string{key})
+				if err != nil || !preview.Items[0].Ready {
+					t.Fatal("fresh positive remained suppressed", preview, err)
+				}
+			}
+			root := generate(t, f, false, 0)
+			if root.Status != "completed" {
+				t.Fatal(root)
+			}
+			if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM scan_changes WHERE run=? AND kind='source_tombstone'", root.ID); n != 0 {
+				t.Fatal("root retained unnecessary tombstones", n)
+			}
+		})
+	}
+}
+
+func TestScanTombstonePublicationQuotaFailureRollsBack(t *testing.T) {
+	f := scanHistoryFixture(t)
+	positive := scanHistoryStart(t, f, 1, "/media/Z")
+	d := ScanDir{ID: "root", Source: "/media/Z"}
+	if err := positive.recordListing(t.Context(), d, []Entry{{ID: "movie", Name: "movie.mkv"}}); err != nil {
+		t.Fatal(err)
+	}
+	scanHistoryDone(t, positive, "root", "movie")
+	if err := positive.publish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	empty := scanHistoryStart(t, f, 2, "/media/Z")
+	if err := empty.recordListing(t.Context(), d, nil); err != nil {
+		t.Fatal(err)
+	}
+	scanHistoryDone(t, empty, "root")
+	// Leave room for source_absent, then reject the internal tombstone via
+	// the actual run-byte CHECK. Counter injection is not a load benchmark.
+	var oldObservation string
+	if err := f.s.db.QueryRow("SELECT payload FROM scan_entries WHERE run=? AND remote='movie'", positive.Run.ID).Scan(&oldObservation); err != nil {
+		t.Fatal(err)
+	}
+	absenceBytes := len(empty.Run.ID) + len("movie") + len("source_absent") + len(oldObservation)
+	if _, err := f.s.db.Exec("UPDATE scan_runs SET bytes=? WHERE id=?", scanRunBytes-absenceBytes-1, empty.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.publish(t.Context()); err == nil {
+		t.Fatal("over-quota publication succeeded")
+	}
+	if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM scan_baselines WHERE run=?", positive.Run.ID); n != 1 {
+		t.Fatal("quota failure lost old pointer", n)
+	}
+	if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM scan_changes WHERE run=?", empty.Run.ID); n != 0 {
+		t.Fatal("failed publication leaked partial changes", n)
+	}
+	if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM sqlite_temp_master WHERE name IN ('scan_compare','scan_tombstones')"); n != 0 {
+		t.Fatal("rolled back temporary comparison survived", n)
+	}
+}
