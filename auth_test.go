@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,9 +44,22 @@ func TestPasswordChangePersistsAndRevokesManagementSessions(t *testing.T) {
 	f, s, h, cookie := authFixture(t)
 	other := authLogin(h, authOldPassword).Result().Cookies()[0]
 	signature := f.s.signature("existing-media")
+	oldEventToken := s.currentEventToken()
 	w := generationPOST(h, cookie, "/api/password", object{"current_password": authOldPassword, "new_password": authNewPassword, "confirm_password": authNewPassword})
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	if s.currentEventToken() == oldEventToken {
+		t.Fatal("password change retained the old event token")
+	}
+	for token, want := range map[string]int{oldEventToken: 401, s.currentEventToken(): 200} {
+		req := httptest.NewRequest("GET", "/api/events/catalog", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, req)
+		if r.Code != want {
+			t.Fatalf("event authentication after password change: got %d, want %d", r.Code, want)
+		}
 	}
 	for _, c := range []*http.Cookie{cookie, other} {
 		req := httptest.NewRequest("GET", "/api/state", nil)
@@ -84,7 +98,22 @@ func TestPasswordChangePersistsAndRevokesManagementSessions(t *testing.T) {
 		t.Fatal("password changed playback signing key")
 	}
 	if s.eventToken != restarted.eventToken {
-		t.Fatal("password changed ingest token")
+		t.Fatal("rotated ingest token did not survive restart")
+	}
+}
+
+func TestCredentialPublicationReportsCommittedSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	want := &adminCredential{Version: 1, Iterations: 600000, Salt: make([]byte, 16), Hash: make([]byte, 32)}
+	syncErr := errors.New("injected directory sync failure")
+	err := writeAdminCredential(dir, want, func(*os.File) error { return syncErr })
+	var published *adminCredentialPublishedError
+	if !errors.As(err, &published) || !errors.Is(err, syncErr) {
+		t.Fatal("publication failure did not report committed credential", err)
+	}
+	got, err := loadAdminCredential(dir)
+	if err != nil || got == nil || got.Version != want.Version {
+		t.Fatal("published credential could not be loaded", err)
 	}
 }
 

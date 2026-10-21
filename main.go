@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const appVersion = "0.14.0"
+const appVersion = "0.14.1"
 
 func env(name, def string) string {
 	if v := os.Getenv(name); v != "" {
@@ -50,6 +50,15 @@ func main() {
 	defer stop()
 	data := env("STRMLINK_DATA", "./data")
 	output := env("STRMLINK_OUTPUT", "./strm-test")
+	if len(os.Args) == 1 || os.Args[1] != "restore-rollback" {
+		if err := checkStartupPermissions(data, output); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if len(os.Args) > 1 && os.Args[1] == "check-permissions" {
+		log.Print("数据和输出目录权限检查通过")
+		return
+	}
 	dataLock, e := acquireDataLock(data)
 	if e != nil {
 		log.Fatal(e)

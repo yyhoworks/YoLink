@@ -22,6 +22,13 @@ type adminCredential struct {
 	Hash       []byte `json:"hash"`
 }
 
+// Publication has already replaced the credential even if the following
+// directory sync fails. Callers updating live authentication must adopt it.
+type adminCredentialPublishedError struct{ err error }
+
+func (e *adminCredentialPublishedError) Error() string { return e.err.Error() }
+func (e *adminCredentialPublishedError) Unwrap() error { return e.err }
+
 func loadAdminCredential(data string) (*adminCredential, error) {
 	raw, err := os.ReadFile(filepath.Join(data, "admin-credential.json"))
 	if os.IsNotExist(err) {
@@ -38,6 +45,10 @@ func loadAdminCredential(data string) (*adminCredential, error) {
 }
 
 func saveAdminCredential(data string, c *adminCredential) error {
+	return writeAdminCredential(data, c, temporaryDirectorySync)
+}
+
+func writeAdminCredential(data string, c *adminCredential, syncDirectory func(*os.File) error) error {
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -64,10 +75,13 @@ func saveAdminCredential(data string, c *adminCredential) error {
 	// Sync the parent directory so the rename itself survives a power loss.
 	d, err := os.Open(data)
 	if err != nil {
-		return err
+		return &adminCredentialPublishedError{err}
 	}
 	defer d.Close()
-	return d.Sync()
+	if err := syncDirectory(d); err != nil {
+		return &adminCredentialPublishedError{err}
+	}
+	return nil
 }
 
 // Caller holds authMu until any login session is issued or revoked.
@@ -188,7 +202,13 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	c.Hash, err = pbkdf2.Key(sha256.New, in.New, c.Salt, c.Iterations, 32)
-	if err != nil || saveAdminCredential(s.s.dir, c) != nil {
+	if err != nil {
+		fail(w, 500, "密码更新失败，请重试")
+		return
+	}
+	saveErr := saveAdminCredential(s.s.dir, c)
+	var published *adminCredentialPublishedError
+	if saveErr != nil && !errors.As(saveErr, &published) {
 		fail(w, 500, "密码保存失败，请检查数据目录权限后重试")
 		return
 	}
@@ -203,6 +223,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "strmlink_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
 	if rotateErr != nil {
 		fail(w, 500, "密码已更新，但事件令牌轮换失败，请稍后在接入设置中手动轮换")
+		return
+	}
+	if saveErr != nil {
+		fail(w, 500, "密码已更新，请使用新密码重新登录；目录持久化确认失败，请检查数据磁盘。事件令牌已轮换，请更新接入方凭据")
 		return
 	}
 	jsonOut(w, 200, object{"ok": true})

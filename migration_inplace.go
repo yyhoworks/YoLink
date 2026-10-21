@@ -62,23 +62,22 @@ func (s *Server) checkpointInplace(p MaintenancePlan, index int) error {
 	return err
 }
 func (s *Server) loadInplaceProgress(p *MaintenancePlan) error {
-	f, err := os.Open(filepath.Join(s.s.dir, "plans", p.ID+".progress"))
+	// All plan readers/writers hold maintenanceMu. Repair only after every
+	// complete record has validated, before a later checkpoint can append.
+	name := filepath.Join(s.s.dir, "plans", p.ID+".progress")
+	raw, err := os.ReadFile(name)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	raw, err := io.ReadAll(f)
-	if err != nil {
-		return errors.New("迁移进度无法读取，请保留备份")
-	}
 	// Records are appended one JSON object per line, each followed by Sync,
 	// so a crash can tear only the final line, and only when it never got
 	// its newline. Tolerate exactly that tail; every complete record stays
 	// usable, while corruption anywhere else still refuses to load.
 	trailingNewline := len(raw) == 0 || raw[len(raw)-1] == '\n'
+	validEnd := len(raw)
 	lines := strings.Split(string(raw), "\n")
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
@@ -87,6 +86,7 @@ func (s *Server) loadInplaceProgress(p *MaintenancePlan) error {
 		var event inplaceProgress
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			if i == len(lines)-1 && !trailingNewline {
+				validEnd = len(raw) - len(line)
 				break
 			}
 			return errors.New("迁移进度无法读取，请保留备份")
@@ -104,6 +104,25 @@ func (s *Server) loadInplaceProgress(p *MaintenancePlan) error {
 			v.Content = ""
 			v.Media = nil
 		}
+	}
+	if !trailingNewline {
+		f, err := os.OpenFile(name, os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if validEnd < len(raw) {
+			// Remove the incomplete JSON, otherwise the next appended
+			// record would turn it into an unrecoverable complete line.
+			err = f.Truncate(int64(validEnd))
+		} else if _, err = f.Seek(0, io.SeekEnd); err == nil {
+			// A whole final record may have lost only its newline.
+			_, err = f.WriteString("\n")
+		}
+		if err != nil {
+			return err
+		}
+		return f.Sync()
 	}
 	return nil
 }
