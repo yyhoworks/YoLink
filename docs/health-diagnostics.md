@@ -1,8 +1,8 @@
 # Account health and playback diagnostics
 
-Intermediate implementation: backend endpoints, contextual UI and isolated
-regression tests are present. Live-provider/NAS validation and the whole-suite
-release gates are not yet complete. Do not treat this document as release approval.
+Status: 已随 0.12.0 发布，账号健康与播放诊断为正式功能。本文件保留为实现
+记录；下文中 "intermediate implementation"、"not yet complete" 等表述均为
+实现期历史记录，不代表当前发布状态。
 
 ## Account observations
 
@@ -18,8 +18,8 @@ does not publish a successful directory observation. Cancellation does not mark
 credentials bad. Results are discarded if the account was removed, disabled or
 edited; an older-started request cannot replace a newer-started result.
 
-Observations and transition notifications are stored together in SQLite schema
-version 3. Repeated same-state failures do not mark an already-read notification
+Observations and transition notifications are stored together in the SQLite
+schema (current version 5). Repeated same-state failures do not mark an already-read notification
 unread again. Only application-owned descriptions are persisted; raw upstream
 errors, URLs and headers are excluded. Health persistence failure does not turn
 a successful media response into an error; it is exposed through the existing
@@ -64,7 +64,7 @@ They omit names, full source/output paths, temporary targets, signing URLs,
 headers and credentials. `readable` is a NAS-side probe result, not player
 success, watch history, audio/codec compatibility or proof of remote seeking.
 
-Schema version 4 stores at most the latest 200 reports, pruned on report creation;
+The current schema (version 5) stores at most the latest 200 reports, pruned on report creation;
 export additionally enforces a seven-day expiry. Authenticated
 `GET /api/diagnostics/{id}/export` downloads the same sanitized JSON. Export does
 not rerun network checks. Existing playback and generation routes are preserved.

@@ -1,7 +1,9 @@
 name: yolink
 services:
   yolink:
-    image: yolink:0.14.0
+    # 发版时只需改这一处版本号来源：设置环境变量 YOLINK_VERSION，或修改下面的默认值；
+    # 默认值须与 main.go 的 appVersion 保持一致。
+    image: yolink:${YOLINK_VERSION:-0.14.0}
     container_name: yolink
     build:
       context: .
@@ -14,6 +16,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       STRMLINK_ADMIN_PASSWORD: ${STRMLINK_ADMIN_PASSWORD:-}
+    # 镜像默认以非特权用户 yolink（10001:10001）运行（见 Dockerfile 的 USER）；
+    # 下面的宿主机目录必须对 10001:10001 可写，例如：sudo chown -R 10001:10001 ./data ./strm-test
     volumes:
       - type: bind
         source: ./data

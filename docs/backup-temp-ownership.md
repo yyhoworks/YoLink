@@ -1,6 +1,10 @@
 # Backup/restore temporary-data ownership corrections
 
-## Resumed checkpoint — final verification pending
+## Status
+
+状态：本文件描述的临时数据所有权修正已随 0.13.0 发布。下文保留实现期的恢复
+检查点与验证记录，其中 "final verification pending"、"remains local, outside
+published 0.12.0" 等表述为历史记录，不代表当前发布状态。
 
 User resumed after 0.12.0 acceptance. This implementation remains local, outside
 published0.12.0. Astra's depth64/node800128 P1 is corrected: new admission bounds

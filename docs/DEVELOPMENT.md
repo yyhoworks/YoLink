@@ -2,6 +2,10 @@
 
 后端使用 Go（最低版本见根 `go.mod`）和 SQLite，运行网页位于 `web/`，通过 Go embed 打入程序。Docker 默认从源码构建。
 
+## CI
+
+`.github/workflows/ci.yml` 在每次 push 与 pull request 时自动运行：Linux 作业执行 `go build ./...`、`go vet ./...`、`go test ./...`（含仅 Linux 编译的恢复/备份/修复测试），前端作业执行 `npm ci` 与 `npm run check`。需要专用环境的测试不在默认 CI 中开启，仍按本文档手工运行：ENOSPC 磁盘满测试（需 `YOLINK_TEST_DISK_FULL=1` 与专用 tmpfs）与浏览器 E2E（需 `YOLINK_BROWSER_E2E`/`YOLINK_CHANGES_BROWSER_E2E` 与本机 Edge）。
+
 ```sh
 go test ./...
 go vet ./...

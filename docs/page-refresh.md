@@ -88,3 +88,6 @@ Independent UI finish review returned scoped `ship` after desktop/phone draft,
 smoke and sampled theme captures; no new UI-preservation finding. Documentation
 consistency review confirmed runtime-only change, with no design-system rewrite.
 Neither review constitutes either final whole-suite signoff.
+
+> 状态更新（2026-10-21）：页面感知刷新已随 0.14.0 发布。上文 “final reviews and release gates remain pending”、
+> “Neither review constitutes either final whole-suite signoff” 等表述为实现期历史记录，不代表当前发布状态。

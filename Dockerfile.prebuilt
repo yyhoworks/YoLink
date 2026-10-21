@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1
 # Fast trial build: select the binary for the Docker target architecture.
-FROM alpine:3.22
+FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 ARG SOURCE_REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/yyhoworks/YoLink" \
       org.opencontainers.image.revision=$SOURCE_REVISION
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data /strm
+# Fixed non-privileged runtime user (yolink, 10001:10001), same as Dockerfile.
+# Bind-mounted host directories (/data, /strm) must be writable by 10001:10001.
+RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data /strm \
+ && addgroup -S -g 10001 yolink \
+ && adduser -S -u 10001 -G yolink -h /data yolink \
+ && chown -R yolink:yolink /data /strm
 COPY dist/yolink-linux-${TARGETARCH} /usr/local/bin/yolink
 RUN chmod 755 /usr/local/bin/yolink
 COPY LICENSE THIRD_PARTY.md /licenses/
@@ -14,4 +19,5 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai STRMLINK_DATA=/data STRMLINK_OUTPUT=/strm STRMLINK_LISTEN=:8796
 EXPOSE 8796
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["yolink","healthcheck"]
+USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/yolink"]

@@ -40,7 +40,13 @@ services:
         target: /media-output
 ```
 
-目录选择器和规则输出使用容器内路径 `/media-output`。该主机目录需要提前存在，并授予容器运行用户必要的权限。若 NAS 需要指定用户，可在 override 中配置适合自己环境的 `user`；不要复制他人的 UID/GID。
+目录选择器和规则输出使用容器内路径 `/media-output`。该主机目录需要提前存在，并授予容器运行用户写权限。镜像默认以固定非特权用户 `yolink`（UID/GID `10001:10001`）运行，默认的 `./data` 与输出目录、以及任何额外挂载目录都需要对它可写，例如：
+
+```sh
+sudo chown -R 10001:10001 ./data ./strm-test /srv/media-output
+```
+
+若 NAS 必须使用其他用户，可在 override 中配置 `user: "UID:GID"` 覆盖镜像默认用户，但目录属主必须与所配置的用户一致；不要复制他人的 UID/GID。
 
 ## 字幕、资料与通知
 

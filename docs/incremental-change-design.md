@@ -1,8 +1,8 @@
 # Incremental synchronization and controlled change repair
 
-Status: approved design with reviewed corrections, implemented in the next
-milestone after manual backup/recovery; final implementation acceptance tracked
-separately. No provider
+Status: 已随 0.14.0 发布，增量同步与受控变更修复为正式功能。本文件保留为
+已批准的设计记录；下文中 "implemented in the next milestone" 等表述均为
+实现期历史记录，不代表当前发布状态。No provider
 delta API or cloud mutation is implemented by this document. Preserve the
 Go/SQLite/static frontend/single-container architecture and existing task engine.
 Independent gpt-6-astra/high design review and correction verification preceded
