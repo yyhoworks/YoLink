@@ -76,7 +76,10 @@ func TestScanRuleLifecycleRevokesPointersAndCollectsOnlyUnreferencedHistory(t *t
 			srv, _, _ := testToolsServer(t, f, f.c)
 			_, _, key, _ := f.e.outputLocation("test/media/first.strm")
 			preview, err := srv.previewChangeRepair(t.Context(), []string{key})
-			if err != nil || !preview.Items[0].Ready {
+			if err != nil || len(preview.Items) != 1 {
+				t.Fatal(preview, err)
+			}
+			if !preview.Items[0].Ready {
 				t.Fatal(preview, err)
 			}
 			// Scheduler timestamp updates preserve baseline authority.
@@ -450,7 +453,22 @@ func TestScanTombstonePublicationQuotaFailureRollsBack(t *testing.T) {
 	if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM scan_changes WHERE run=?", empty.Run.ID); n != 0 {
 		t.Fatal("failed publication leaked partial changes", n)
 	}
-	if n := scanHistoryCount(t, f, "SELECT COUNT(*) FROM sqlite_temp_master WHERE name IN ('scan_compare','scan_tombstones')"); n != 0 {
-		t.Fatal("rolled back temporary comparison survived", n)
+	// TEMP tables are connection-scoped in SQLite: leftovers from the failed
+	// publication could only survive on the very connection its transaction
+	// used. The store pool holds exactly one connection (SetMaxOpenConns(1)
+	// in openStore), so the connection obtained here after publish released
+	// its own is that same physical connection — checking through a fresh
+	// pool query could silently land elsewhere if the pool ever grows.
+	conn, err := f.s.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var tempLeft int
+	if err := conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sqlite_temp_master WHERE name IN ('scan_compare','scan_tombstones')").Scan(&tempLeft); err != nil {
+		t.Fatal(err)
+	}
+	if tempLeft != 0 {
+		t.Fatal("rolled back temporary comparison survived", tempLeft)
 	}
 }

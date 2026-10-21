@@ -163,9 +163,6 @@ func Test115Download302UsesPlayerUAAndIsolatesCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := cipher115Public
-	cipher115Public = &private.PublicKey
-	t.Cleanup(func() { cipher115Public = old })
 	f := setup(t)
 	calls, metadata := 0, 0
 	p := fixture115(t, f, func(r *http.Request) (*http.Response, error) {
@@ -185,6 +182,7 @@ func Test115Download302UsesPlayerUAAndIsolatesCache(t *testing.T) {
 		resp.Header.Add("Set-Cookie", "download_token=fixture-download; Path=/; HttpOnly")
 		return resp, nil
 	})
+	p.key115 = &private.PublicKey
 	s, h, _ := testToolsServer(t, f, p)
 	m := Media{ID: "115-media", Account: "115-account", RemoteID: "101", PickCode: "pick-movie", Name: "movie.mkv"}
 	f.s.saveMedia(m)

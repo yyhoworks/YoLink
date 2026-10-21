@@ -141,6 +141,21 @@ func (s *Server) removeRule(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if _, e = tx.Exec("DELETE FROM scan_baselines WHERE rule=?", id); e == nil {
+		// Also drop the rule's scan history in the same transaction; the
+		// scan_run_cleanup trigger cascades each run to its entries,
+		// changes and items. The exceptions mirror pruneScanHistoryTx: a
+		// run still referenced by a live change plan, by its own
+		// queued/running or resumable job, or by an active run stays for
+		// the history GC to collect once the reference goes away.
+		// change_plans has no rule column (the rule lives inside its
+		// payload), so plans keep their existing 24h expiry instead of
+		// being deleted here.
+		_, e = tx.Exec(`DELETE FROM scan_runs WHERE rule=?
+AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=scan_runs.id AND (j.status IN ('queued','running') OR j.status='interrupted' AND json_extract(j.payload,'$.resumable')=1))
+AND NOT EXISTS (SELECT 1 FROM scan_runs a JOIN jobs j ON j.id=a.id,json_tree(a.payload) ref WHERE a.status='active' AND (j.status IN ('queued','running') OR j.status='interrupted' AND json_extract(j.payload,'$.resumable')=1) AND ref.key IN ('run','previous') AND ref.value=scan_runs.id)
+AND NOT EXISTS (SELECT 1 FROM change_plans p,json_tree(p.payload) ref WHERE ref.key='run' AND ref.value=scan_runs.id)`, id)
+	}
+	if e == nil {
 		_, e = tx.Exec("DELETE FROM rules WHERE id=?", id)
 	}
 	if e == nil {

@@ -25,7 +25,12 @@ func (f *fixtureCloud) List(ctx context.Context, a, parent string) ([]Entry, err
 	if parent == f.fail {
 		return nil, errors.New("模拟分页失败")
 	}
-	return f.dirs[parent], ctx.Err()
+	// Real providers return either entries or an error, never both; in
+	// particular a cancelled context yields no entries.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.dirs[parent], nil
 }
 func (f *fixtureCloud) Resolve(ctx context.Context, m Media) (PlaybackTarget, error) {
 	return f.target, nil

@@ -132,7 +132,7 @@ func TestInplaceMigrationGuardsAndUnsupportedFiles(t *testing.T) {
 		t.Fatal("busy job accepted")
 	}
 	f.s.saveJob(Job{ID: "guard-busy", Status: "cancelled"})
-	os.WriteFile(file, []byte("manually changed"), 0644)
+	mustSucceed(t, os.WriteFile(file, []byte("manually changed"), 0644))
 	p = migrationPlanResponse(t, s, generationPOST(h, c, endpoint, map[string]any{"confirm_directory": p.Directory}))
 	for _, item := range p.Items {
 		if item.Applied || item.Error == "" {
@@ -182,14 +182,14 @@ func TestInplaceRollbackKeepsExternalEditsAndRecoversInterruptedWrite(t *testing
 	m.RemoteID = "movie"
 	f.s.saveMedia(m)
 	backup := s.inplaceBackup(p, p.Items[0])
-	os.MkdirAll(filepath.Dir(backup), 0700)
-	os.WriteFile(backup, raw, 0600)
-	os.WriteFile(file, []byte(p.Items[0].Content), 0644)
+	mustSucceed(t, os.MkdirAll(filepath.Dir(backup), 0700))
+	mustSucceed(t, os.WriteFile(backup, raw, 0600))
+	mustSucceed(t, os.WriteFile(file, []byte(p.Items[0].Content), 0644))
 	p = migrationPlanResponse(t, s, generationPOST(h, c, "/api/maintenance/"+p.ID+"/apply", map[string]any{"confirm_directory": p.Directory, "limit": 1}))
 	if !p.Items[0].Applied {
 		t.Fatal(planSummary(p))
 	}
-	os.WriteFile(file, []byte("external"), 0644)
+	mustSucceed(t, os.WriteFile(file, []byte("external"), 0644))
 	p = migrationPlanResponse(t, s, generationPOST(h, c, "/api/maintenance/"+p.ID+"/rollback", map[string]any{}))
 	got, _ := os.ReadFile(file)
 	if string(got) != "external" || !p.Items[0].Applied || p.Items[0].Error == "" {

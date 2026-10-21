@@ -144,12 +144,19 @@ type restartCloud struct {
 	mu    sync.Mutex
 	calls map[string]int
 	block bool
+	// subStarted is closed the first time the "sub" directory is listed, so
+	// tests can wait on a channel instead of polling the call counter.
+	subStarted  chan struct{}
+	subSignaled sync.Once
 }
 
 func (c *restartCloud) List(ctx context.Context, a, parent string) ([]Entry, error) {
 	c.mu.Lock()
 	c.calls[parent]++
 	c.mu.Unlock()
+	if parent == "sub" && c.subStarted != nil {
+		c.subSignaled.Do(func() { close(c.subStarted) })
+	}
 	if c.block && parent == "sub" {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -162,7 +169,7 @@ func (c *restartCloud) Resolve(ctx context.Context, m Media) (PlaybackTarget, er
 func TestRestartContinuesSavedDirectoryCursor(t *testing.T) {
 	f := setup(t)
 	f.e.Close()
-	slow := &restartCloud{base: f.c, calls: map[string]int{}, block: true}
+	slow := &restartCloud{base: f.c, calls: map[string]int{}, block: true, subStarted: make(chan struct{})}
 	e1, err := newEngine(context.Background(), f.s, slow, f.output)
 	if err != nil {
 		t.Fatal(err)
@@ -171,18 +178,10 @@ func TestRestartContinuesSavedDirectoryCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(4 * time.Second)
-	for {
-		slow.mu.Lock()
-		started := slow.calls["sub"] > 0
-		slow.mu.Unlock()
-		if started {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("did not reach checkpoint")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-slow.subStarted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("did not reach checkpoint")
 	}
 	e1.Close()
 	s2, err := openStore(f.data)
@@ -307,14 +306,18 @@ func TestFailedRefreshCanRetryWithoutRegenerating(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.r.RefreshLibrary = true
-	f.s.saveRule(f.r)
+	mustSucceed(t, f.s.saveRule(f.r))
 	j := generate(t, f, false, 0)
 	for i := 0; i < 3; i++ {
-		f.s.db.Exec("UPDATE deliveries SET next_at=0")
+		if _, err := f.s.db.Exec("UPDATE deliveries SET next_at=0"); err != nil {
+			t.Fatal(err)
+		}
 		f.e.processDeliveries()
 	}
 	var id, status string
-	f.s.db.QueryRow("SELECT id,status FROM deliveries WHERE kind='library'").Scan(&id, &status)
+	if err := f.s.db.QueryRow("SELECT id,status FROM deliveries WHERE kind='library'").Scan(&id, &status); err != nil {
+		t.Fatal(err)
+	}
 	if status != "failed" {
 		t.Fatal(status)
 	}
@@ -330,7 +333,9 @@ func TestFailedRefreshCanRetryWithoutRegenerating(t *testing.T) {
 	if w.Code != 202 {
 		t.Fatal(w.Code, w.Body)
 	}
-	f.s.db.QueryRow("SELECT status FROM deliveries WHERE id=?", id).Scan(&status)
+	if err := f.s.db.QueryRow("SELECT status FROM deliveries WHERE id=?", id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
 	if status != "pending" {
 		t.Fatal("failed refresh was not requeued")
 	}
@@ -342,11 +347,11 @@ func TestConsoleBrowserFixture(t *testing.T) {
 	}
 	f := setup(t)
 	f.a.Name = "移动媒体盘（界面测试）"
-	f.s.saveAccount(f.a)
+	mustSucceed(t, f.s.saveAccount(f.a))
 	f.r.Name = "影视与音乐（界面测试）"
-	f.s.saveRule(f.r)
+	mustSucceed(t, f.s.saveRule(f.r))
 	generated := generate(t, f, false, 0)
-	f.s.setSetting("command_targets", scanJSON([]CommandTarget{{Alias: "测试剧集", Rule: f.r.ID, Path: "/media/剧集", Enabled: true}}))
+	mustSucceed(t, f.s.setSetting("command_targets", scanJSON([]CommandTarget{{Alias: "测试剧集", Rule: f.r.ID, Path: "/media/剧集", Enabled: true}})))
 	notifyTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			jsonOut(w, 200, object{"status": "ok", "platform": "webhook"})
@@ -355,18 +360,19 @@ func TestConsoleBrowserFixture(t *testing.T) {
 		}
 	}))
 	defer notifyTarget.Close()
-	f.s.saveIntegration(IntegrationConfig{WebhookEnabled: true, Webhook: notifyTarget.URL + "/webhooks/yolink", WebhookSecret: "fixture-signature"})
+	mustSucceed(t, f.s.saveIntegration(IntegrationConfig{WebhookEnabled: true, Webhook: notifyTarget.URL + "/webhooks/yolink", WebhookSecret: "fixture-signature"}))
 	channels, _ := f.s.channels()
 	channels = append(channels, NotificationChannel{ID: "fixture-telegram", Name: "备用 Telegram（界面测试）", Type: "telegram", Enabled: false, Events: []string{"failure"}, Version: 1})
-	sealed, _ := f.s.encodeChannels(channels)
-	f.s.setSetting("notification_channels", sealed)
-	f.s.db.Exec("INSERT INTO event_clients(id,name,token_hash,enabled,rules,created,last_used) VALUES('fixture-client','整理工具（界面测试）',?,1,?,?,?)", eventTokenHash("fixture-scoped-token"), scanJSON([]string{f.r.ID}), time.Now().Unix(), time.Now().Unix())
-	f.s.db.Exec("INSERT INTO event_calls(client,name,created,action,status) VALUES('fixture-client','整理工具（界面测试）',?,'/api/events',202)", time.Now().Unix())
+	sealed, err := f.s.encodeChannels(channels)
+	mustSucceed(t, err)
+	mustSucceed(t, f.s.setSetting("notification_channels", sealed))
+	mustExec(t, f.s.db, "INSERT INTO event_clients(id,name,token_hash,enabled,rules,created,last_used) VALUES('fixture-client','整理工具（界面测试）',?,1,?,?,?)", eventTokenHash("fixture-scoped-token"), scanJSON([]string{f.r.ID}), time.Now().Unix(), time.Now().Unix())
+	mustExec(t, f.s.db, "INSERT INTO event_calls(client,name,created,action,status) VALUES('fixture-client','整理工具（界面测试）',?,'/api/events',202)", time.Now().Unix())
 	f.e.queueDelivery(generated.ID, "webhook", object{"title": "生成完成", "source_path": "/media/剧集"})
-	f.s.db.Exec("UPDATE deliveries SET status='sent',attempts=1 WHERE job=? AND kind='webhook'", generated.ID)
+	mustExec(t, f.s.db, "UPDATE deliveries SET status='sent',attempts=1 WHERE job=? AND kind='webhook'", generated.ID)
 	f.e.queueDelivery(generated.ID, "library", object{"output": f.output})
-	f.s.db.Exec("UPDATE deliveries SET status='failed',attempts=3,error='界面测试：媒体服务器暂时不可达' WHERE job=? AND kind='library'", generated.ID)
-	f.s.db.Exec("INSERT INTO ingest_events(id,rule,source_path,status,job,error,created,revision) VALUES('fixture-event',?,'/media/剧集','submitted',?,'',?,1)", f.r.ID, generated.ID, time.Now().Unix())
+	mustExec(t, f.s.db, "UPDATE deliveries SET status='failed',attempts=3,error='界面测试：媒体服务器暂时不可达' WHERE job=? AND kind='library'", generated.ID)
+	mustExec(t, f.s.db, "INSERT INTO ingest_events(id,rule,source_path,status,job,error,created,revision) VALUES('fixture-event',?,'/media/剧集','submitted',?,'',?,1)", f.r.ID, generated.ID, time.Now().Unix())
 	legacyDir := filepath.Join(f.output, "MVStrm")
 	migrationFile(t, legacyDir, "电影/别名.strm", oldMigrationURL("yun139-1", "/电影 & 测试.mkv"))
 	migrationFile(t, legacyDir, "音乐/音乐.strm", oldMigrationURL("yun139-1", "/音乐.flac"))
@@ -401,9 +407,5 @@ func TestConsoleBrowserFixture(t *testing.T) {
 			static.ServeHTTP(w, r)
 		}
 	})
-	server := &http.Server{Addr: "127.0.0.1:18896", Handler: reviewHandler}
-	go server.ListenAndServe()
-	defer server.Close()
-	t.Log("isolated review at http://127.0.0.1:18896; password fixture-admin-password")
-	<-time.After(15 * time.Minute)
+	runReviewFixture(t, reviewHandler, "isolated console review; password fixture-admin-password")
 }

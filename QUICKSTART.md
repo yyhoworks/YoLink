@@ -8,8 +8,16 @@
 git clone https://github.com/yyhoworks/YoLink.git
 cd YoLink
 cp .env.example .env
-docker compose up -d --build
+mkdir -p ./data ./strm-test
+sudo chown -R 10001:10001 ./data ./strm-test
+docker compose build
+docker compose run --rm --no-deps yolink check-permissions
+docker compose up -d
 ```
+
+这些命令使用默认的专属目录和 UID/GID；root 终端可省略 `sudo`。修改 `.env` 的 `STRMLINK_OUTPUT_DIR` 或 `YOLINK_UID`/`YOLINK_GID` 后，需要先建立实际挂载目录，按所选运行用户授予权限，再执行检查与启动。Compose 不会自动创建宿主机目录，避免意外建立 root 所有且服务不可写的目录。
+
+`check-permissions` 以实际容器用户验证数据/输出目录及已有数据库、锁文件和密钥的访问权限，不启动服务或改写数据库。检查和正常启动都会在权限不足时给出具体路径与处理提示。
 
 默认随机生成首次管理员密码，位于 `data/initial-admin-password.txt`。也可以在首次启动前通过 `.env` 的 `STRMLINK_ADMIN_PASSWORD` 设置初始密码。在页面修改密码后，持久化的新密码优先，重启不会恢复旧初始密码。
 
@@ -40,7 +48,9 @@ services:
         target: /media-output
 ```
 
-目录选择器和规则输出使用容器内路径 `/media-output`。该主机目录需要提前存在，并授予容器运行用户必要的权限。若 NAS 需要指定用户，可在 override 中配置适合自己环境的 `user`；不要复制他人的 UID/GID。
+目录选择器和规则输出使用容器内路径 `/media-output`。该主机目录需要提前存在，并通过属主、组权限或 NAS ACL 授予运行用户遍历目录及创建文件的权限。镜像默认用户为 `yolink`（UID/GID `10001:10001`）。不要对共享媒体库直接递归改属主。
+
+NAS 使用其他用户时，在 `.env` 设置 `YOLINK_UID`、`YOLINK_GID`，或在 override 配置 `user: "UID:GID"`。专属数据目录的已有数据库、锁文件和密钥也必须允许该用户访问；不要复制他人的 UID/GID。`check-permissions` 覆盖默认数据和输出挂载；额外挂载需另外验证写入权限。
 
 ## 字幕、资料与通知
 
@@ -52,12 +62,21 @@ services:
 
 ```sh
 git pull --ff-only
-docker compose up -d --build
+docker compose stop yolink
+# 默认专属目录；自定义路径/UID/GID 时，改用实际设置。
+sudo chown -R 10001:10001 ./data ./strm-test
+docker compose build
+docker compose run --rm --no-deps yolink check-permissions
+docker compose up -d
 docker compose ps
 docker compose logs --tail=80 yolink
 ```
 
 保留 `data/`、输出目录、`.env`、Compose override。数据库与密钥应一起备份；缺少密钥会影响凭据解密和已有播放签名。更新前备份数据，更新后使用原管理员密码重新登录。
+
+从以 root 运行的旧镜像升级时，停止服务后再调整已有文件权限。仅修改挂载目录本身的属主不足以修复 root 所有的 `0600` 密钥、数据库和锁文件；专属目录按上面的递归命令处理，共享输出目录使用现有用户/ACL。保留数据文件内容，不要删除数据库或重新生成密钥。
+
+修改管理员密码现在也会轮换兼容事件令牌；改密后请同步更新 Hermes 或旧脚本的接入凭据。
 
 更改服务地址不会自动改写已有 STRM。需要使用迁移维护工具预览、核对并备份后更新，避免手工批量替换。
 

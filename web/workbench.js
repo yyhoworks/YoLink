@@ -4,34 +4,40 @@ const settingsMeta={telegram:['bell','通知通道','把任务结果发送到指
 const wbIcon=name=>'<i data-lucide="'+name+'" aria-hidden="true"></i>';
 
 // Reuse the existing forms and their listeners. Each form lives in one place.
-$('view-settings').querySelector('.automation-settings-nav').remove();
-const settingsStash=document.createElement('div');settingsStash.hidden=true;settingsStash.id='settings-stash';$('view-settings').append(settingsStash);
-const advancedSettings=$('event-token').closest('section.panel');
-const commandSettings=$('automation-settings').querySelector('section.generation-options');
-const pipelineSettings=$('automation-pipeline').closest('section');
+// Every rearrangement step below is guarded: if the settings markup changes,
+// skip just that step instead of aborting the whole script while it loads.
+const wbStep=fn=>{try{fn()}catch{/* 设置页结构已变化，跳过这一步界面整理 */}};
+wbStep(()=>$('view-settings')?.querySelector('.automation-settings-nav')?.remove());
+const settingsStash=document.createElement('div');settingsStash.hidden=true;settingsStash.id='settings-stash';wbStep(()=>$('view-settings')?.append(settingsStash));
+const advancedSettings=$('event-token')?.closest('section.panel')||null;
+const commandSettings=$('automation-settings')?.querySelector('section.generation-options')||null;
+const pipelineSettings=$('automation-pipeline')?.closest('section')||null;
 const telegramSettings=document.createElement('section');telegramSettings.id='telegram-settings';
 const channelSettings=document.createElement('section');channelSettings.id='channel-settings';settingsStash.append(channelSettings);
 telegramSettings.innerHTML='<h2>Hermes 通知连接</h2><p class="hint">生成结果发送到你已授权的 Telegram 私聊。</p>';
-telegramSettings.append($('automation-connection'),$('automation-check').parentElement,$('automation-error'));
-for(const el of [telegramSettings,commandSettings,$('integration-form'),$('settings-form'),$('password-form'),advancedSettings])settingsStash.append(el);
-$('automation-settings').remove();
-$('view-settings').insertAdjacentHTML('beforeend','<div id="settings-overview" aria-live="polite"><p class="hint">正在读取连接状态…</p></div>');
-$('settings-overview').before(Object.assign(document.createElement('p'),{id:'settings-overview-error',className:'notice error',hidden:true}));
-$('view-settings').querySelector('.heading').insertAdjacentHTML('beforeend','<button id="settings-refresh" type="button">'+wbIcon('refresh-cw')+'刷新状态</button>');
+wbStep(()=>telegramSettings.append(...[$('automation-connection'),$('automation-check')?.parentElement,$('automation-error')].filter(el=>el)));
+for(const el of [telegramSettings,commandSettings,$('integration-form'),$('settings-form'),$('password-form'),advancedSettings])if(el)settingsStash.append(el);
+wbStep(()=>$('automation-settings')?.remove());
+wbStep(()=>$('view-settings')?.insertAdjacentHTML('beforeend','<div id="settings-overview" aria-live="polite"><p class="hint">正在读取连接状态…</p></div>'));
+wbStep(()=>$('settings-overview')?.before(Object.assign(document.createElement('p'),{id:'settings-overview-error',className:'notice error',hidden:true})));
+wbStep(()=>$('view-settings')?.querySelector('.heading')?.insertAdjacentHTML('beforeend','<button id="settings-refresh" type="button">'+wbIcon('refresh-cw')+'刷新状态</button>'));
 document.body.insertAdjacentHTML('beforeend','<dialog id="settings-drawer" class="settings-drawer" aria-labelledby="settings-drawer-title"><div class="settings-drawer-heading"><h2 id="settings-drawer-title"></h2><button id="settings-drawer-close" type="button" aria-label="关闭设置">'+wbIcon('x')+'</button></div><div id="settings-drawer-error" class="notice error" role="alert" hidden></div><div id="settings-drawer-body"></div></dialog>');
-$('view-settings').querySelector('.heading p').textContent='先看连接状态，需要修改时再打开对应设置。';
-const integrationSections=[...$('integration-form').querySelectorAll(':scope > .generation-options')];
-const webhookSection=integrationSections[1];
-webhookSection.querySelector('h3').textContent='通知连接';
+wbStep(()=>{const headingText=$('view-settings')?.querySelector('.heading p');if(headingText)headingText.textContent='先看连接状态，需要修改时再打开对应设置。';});
+const integrationSections=[...($('integration-form')?.querySelectorAll(':scope > .generation-options')||[])];
+const webhookSection=integrationSections[1]||null;
 const replaceDetails=document.createElement('details');replaceDetails.className='settings-replace';
-replaceDetails.innerHTML='<summary>修改接收地址或通知验证密钥</summary><p class="hint">只有需要替换时才填写新值。留空保存会保留原配置。</p>';
-const webhookLabels=[...webhookSection.querySelectorAll(':scope > label')];
-for(const label of webhookLabels.slice(1))replaceDetails.append(label);
-webhookSection.insertBefore(replaceDetails,$('webhook-test'));
-const savedWebhook=document.createElement('p');savedWebhook.id='settings-webhook-saved';savedWebhook.className='settings-saved-connection';replaceDetails.before(savedWebhook);
-$('integration-webhook-secret').closest('label').childNodes[0].textContent='通知验证密钥（可选）';
-integrationSections[2].hidden=true;
-const libraryHelp=document.createElement('p');libraryHelp.className='settings-field-help';libraryHelp.textContent='路径映射：下面两条路径必须指向同一份 STRM 文件。Emby 看到的路径以其媒体库文件夹设置为准，不能只根据 NAS 物理路径推断。';$('integration-local').closest('label').before(libraryHelp);
+wbStep(()=>{
+ if(!webhookSection)return;
+ const webhookTitle=webhookSection.querySelector('h3');if(webhookTitle)webhookTitle.textContent='通知连接';
+ replaceDetails.innerHTML='<summary>修改接收地址或通知验证密钥</summary><p class="hint">只有需要替换时才填写新值。留空保存会保留原配置。</p>';
+ const webhookLabels=[...webhookSection.querySelectorAll(':scope > label')];
+ for(const label of webhookLabels.slice(1))replaceDetails.append(label);
+ webhookSection.insertBefore(replaceDetails,$('webhook-test'));
+ const savedWebhook=document.createElement('p');savedWebhook.id='settings-webhook-saved';savedWebhook.className='settings-saved-connection';replaceDetails.before(savedWebhook);
+});
+wbStep(()=>{const secretLabel=$('integration-webhook-secret')?.closest('label');if(secretLabel?.childNodes[0])secretLabel.childNodes[0].textContent='通知验证密钥（可选）';});
+if(integrationSections[2])integrationSections[2].hidden=true;
+const libraryHelp=document.createElement('p');libraryHelp.className='settings-field-help';libraryHelp.textContent='路径映射：下面两条路径必须指向同一份 STRM 文件。Emby 看到的路径以其媒体库文件夹设置为准，不能只根据 NAS 物理路径推断。';wbStep(()=>$('integration-local')?.closest('label')?.before(libraryHelp));
 
 function closeSettingsDrawer(){
  if(typeof clearConnectionDrafts==='function')clearConnectionDrafts();
@@ -46,10 +52,10 @@ async function openSettingsDrawer(category){
  const body=$('settings-drawer-body');$('settings-drawer-title').textContent=settingsMeta[category][1];$('settings-drawer-error').hidden=true;
  if(category==='telegram')body.append(channelSettings);
  if(category==='library')body.append($('integration-form'));
- if(category==='commands')body.append(commandSettings);
+ if(category==='commands'&&commandSettings)body.append(commandSettings);
  if(category==='access')body.append($('settings-form'));
  if(category==='security')body.append($('password-form'));
- if(category==='advanced'){body.append(advancedSettings);renderLegacyEventOptions();}
+ if(category==='advanced'){if(advancedSettings)body.append(advancedSettings);renderLegacyEventOptions();}
  if(category==='library'){
   $('integration-form').querySelector(':scope > h2').hidden=true;
   $('integration-form').querySelector(':scope > p').textContent=category==='telegram'?'无需重复填写已保存的地址和密钥。每条目录规则的「生成后操作」决定任务是否通知。':'保存后，再在需要的目录规则「生成后操作」中启用媒体库刷新。';
@@ -78,7 +84,7 @@ function renderSettingsSummary(){
  $('settings-webhook-saved').textContent=c.has_webhook?'通知接收地址已保存'+(conn.host?' · '+conn.host:'')+'。'+(c.has_webhook_secret?'通知验证密钥已保存，无需重复填写。':'尚未配置通知验证密钥。'):'尚未配置通知接收地址。';
  const first=a.pipeline[0];$('settings-latest-task').textContent=first?'最近目录请求：'+(autoState[first.status]||first.status)+' · '+first.path:'暂无目录请求。可在 Hermes 私聊中发送已启用的 /strm 命令。';
 }
-const taskHint=document.createElement('p');taskHint.id='settings-latest-task';taskHint.className='settings-task-hint';commandSettings.append(taskHint);
+const taskHint=document.createElement('p');taskHint.id='settings-latest-task';taskHint.className='settings-task-hint';if(commandSettings)commandSettings.append(taskHint);
 $('settings-drawer-close').addEventListener('click',closeSettingsDrawer);
 $('settings-refresh').addEventListener('click',event=>action(event.currentTarget,loadIntegrations));
 $('settings-drawer').addEventListener('cancel',event=>{event.preventDefault();closeSettingsDrawer()});
@@ -93,7 +99,7 @@ $('records-filter-form').before(toolsPanel);
 $('playback-refresh').hidden=true;
 for(const tab of [...document.querySelectorAll('[data-record-kind="direct"]')]){tab.dataset.recordKind='tools';tab.id='records-tools-tab';tab.textContent='诊断工具'}
 $('records-tools-tab').insertAdjacentHTML('beforebegin','<button id="records-deliveries-tab" data-record-kind="deliveries" role="tab" aria-selected="false" aria-controls="records-table-panel" tabindex="-1">通知投递</button>');
-const directoryHistory=document.createElement('details');directoryHistory.className='records-directory-history';directoryHistory.id='records-directory-history';directoryHistory.innerHTML='<summary>最近目录请求与失败重试</summary>';directoryHistory.append(pipelineSettings);$('records-filter-form').before(directoryHistory);directoryHistory.hidden=true;
+const directoryHistory=document.createElement('details');directoryHistory.className='records-directory-history';directoryHistory.id='records-directory-history';directoryHistory.innerHTML='<summary>最近目录请求与失败重试</summary>';if(pipelineSettings)directoryHistory.append(pipelineSettings);$('records-filter-form').before(directoryHistory);directoryHistory.hidden=true;
 $('view-records').querySelector('.heading p').textContent='查看文件生成、播放请求和通知投递；诊断工具也在这里。';
 for(const button of document.querySelectorAll('.sidebar [data-nav="records"]')){button.setAttribute('aria-label','运行记录');button.title='运行记录';const label=button.querySelector('.nav-long');if(label)label.textContent='运行记录'}
 const directLabels={pending:'等待发送',sent:'已投递',paused:'已暂停'};Object.assign(recordOutcomes,directLabels);

@@ -39,7 +39,7 @@ try {
     }
     if ($DiskFull) { $diskMount = '--tmpfs /scratch:rw,nosuid,nodev,size=64m -e TMPDIR=/scratch -e YOLINK_TEST_DISK_FULL=1' }
     if ($TestPattern.Contains("'")) { throw 'Unsupported test pattern quote' }
-    $command = "/usr/local/bin/docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,size=512m --memory 1g --cpu-shares 256 --mount type=bind,src=$remoteDir,dst=/drill,readonly $diskMount -e YOLINK_OS_NETWORK_ISOLATED=1 --entrypoint /drill/yolink-tests alpine:3.22 -test.v -test.timeout=30m -test.run '$TestPattern'"
+    $command = "/usr/local/bin/docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,size=512m --memory 1g --cpu-shares 256 --mount type=bind,src=$remoteDir,dst=/drill,readonly $diskMount -e YOLINK_OS_NETWORK_ISOLATED=1 --entrypoint /drill/yolink-tests alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 -test.v -test.timeout=30m -test.run '$TestPattern'"
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $output = @(& ssh @sshArgs $command 2>&1 | ForEach-Object { "$_" })
     $resultCode = $LASTEXITCODE

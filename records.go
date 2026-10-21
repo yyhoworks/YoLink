@@ -273,8 +273,10 @@ func recordFilter(q url.Values) (string, []any, int, int, error) {
 		}
 	}
 	if value := q.Get("date"); value != "" {
-		zone := time.FixedZone("Asia/Shanghai", 8*3600)
-		day, err := time.ParseInLocation("2006-01-02", value, zone)
+		// Day boundaries follow the service's local timezone; hardcoding a
+		// zone here made the filter disagree with the host clock on any
+		// deployment outside that zone.
+		day, err := time.ParseInLocation("2006-01-02", value, time.Local)
 		if err != nil {
 			return "", nil, 0, 0, errors.New("日期格式无效")
 		}

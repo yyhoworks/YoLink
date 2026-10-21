@@ -1,0 +1,77 @@
+# Go, Windows authentication/recovery, container permissions and frontend checks.
+# No secrets are used or required by this workflow.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Go version is pinned by go.mod (go 1.25.0).
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      # This Linux job is also what makes the //go:build linux test files
+      # (restore journal/cleanup, backup HTTP, repair publication, network
+      # isolation) actually execute in automation; on non-Linux machines
+      # those tests silently do not exist.
+      - run: go test ./...
+      # Intentionally NOT enabled by default (need special environments, run
+      # them manually or in a dedicated job):
+      # - ENOSPC restore tests: YOLINK_TEST_DISK_FULL=1 plus a dedicated
+      #   64MiB tmpfs mount (see restore_journal_linux_test.go).
+      # - Browser E2E: YOLINK_BROWSER_E2E=1 / YOLINK_CHANGES_BROWSER_E2E=1
+      #   plus installed frontend dependencies and Microsoft Edge
+      #   (see reliability_browser_test.go, change_browser_test.go).
+
+  windows:
+    name: Windows auth and migration
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -count=1 -run '^(TestPassword|TestCredentialPublication|TestInitialPassword|TestSessionExpiry|TestInplace|TestStartupPermissions)' .
+
+  docker:
+    name: Docker install and upgrade permissions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker build --tag yolink:permissions-check .
+      - run: python3 scripts/verify-docker-permissions.py --image yolink:permissions-check
+
+  frontend:
+    name: Frontend check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # frontend/package.json engines: ^22.13.0 || ^24.0.0 || >=26.0.0
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # "check" = typecheck + vitest + lint + verify:generated.
+      # It does not include the Playwright browser suites (test:browser),
+      # which need a local Edge/Chromium install and stay manual for now.
+      - run: npm run check

@@ -1,14 +1,8 @@
 # Restore activation and rollback — implementation plan
 
-Status2026-10-21: revised design accepted by explicitly assigned Astra/high.
-Activation journal, file operations, rollback/review and HTTP integration are
-implemented in the development branch but NOT release-approved. Scoped core
-corrections were reviewed; expanded upload/GC/HTTP changes still have unresolved
-final fault evidence. Ownership cleanup corrections have focused Astra
-verification; settings UI and candidate summaries are implemented with focused
-browser tests. The final candidate and deployment are not yet approved.
-Phase-one reliability release is isolated in a separate checkout; no unfinished
-restore code is included. Resume this work without discarding its implementation.
+Status2026-10-21: 已随 0.13.0 发布，恢复激活与回滚为正式功能。本文件保留为
+设计记录；下文中 "NOT release-approved"、"not yet approved" 等表述均为实现期
+历史记录，不代表当前发布状态。
 
 ## Interface and operational scope
 

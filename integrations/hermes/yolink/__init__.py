@@ -2,11 +2,39 @@
 
 import json
 import logging
+import os
 from pathlib import Path
 from urllib import error, request
 
 
 CONFIG = Path(__file__).resolve().parents[2] / "yolink.json"
+
+
+def _config_candidates():
+    """Config lookup order: $YOLINK_CONFIG, the classic location next to the
+    Hermes home (parents[2] of this file, i.e. ~/.hermes/yolink.json when the
+    plugin lives in ~/.hermes/<plugin-dir>/yolink/), beside the plugin package,
+    and ~/.hermes/yolink.json as an absolute fallback."""
+    candidates = []
+    env_path = os.environ.get("YOLINK_CONFIG", "").strip()
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+    candidates.append(CONFIG)
+    candidates.append(Path(__file__).resolve().parent / "yolink.json")
+    candidates.append(Path.home() / ".hermes" / "yolink.json")
+    unique = []
+    for path in candidates:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def _load_config():
+    tried = _config_candidates()
+    for path in tried:
+        if path.is_file():
+            return json.loads(path.read_text())
+    raise FileNotFoundError("；".join(str(path) for path in tried))
 STATUS = {
     "pending": "等待开始", "queued": "排队中", "running": "生成中",
     "completed": "已完成", "partial": "部分失败", "failed": "失败",
@@ -77,7 +105,7 @@ def _status(config):
 
 def handle_command(raw_args):
     try:
-        config = json.loads(CONFIG.read_text())
+        config = _load_config()
         session = _session()
         if (session["platform"] != "telegram" or
                 session["user_id"] not in config["allowed_users"] or
@@ -105,8 +133,10 @@ def handle_command(raw_args):
                 f"状态：{STATUS.get(response['status'], response['status'])}\n"
                 + ("任务结束后将尝试发送结果通知；使用 /strm 状态 查看进度。" if target.get("notify") else
                  "此目录规则未开启结果通知；使用 /strm 状态 查看进度。"))
-    except FileNotFoundError:
-        return "YoLink 尚未配置，请先完成连接设置。"
+    except FileNotFoundError as exc:
+        return ("YoLink 尚未配置，请先完成连接设置。已按顺序查找以下配置文件路径，均不存在："
+                + str(exc)
+                + "。也可设置环境变量 YOLINK_CONFIG 指定配置文件路径。")
     except (KeyError, TypeError, json.JSONDecodeError):
         return "YoLink 插件配置或返回数据无效，请检查连接设置。"
     except ValueError as exc:

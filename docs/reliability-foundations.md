@@ -1,8 +1,8 @@
 # Reliability foundations — implementation evidence
 
-This is an intermediate engineering record, not release approval. The six-feature
-suite, final independent reviews, UI acceptance and production release remain
-pending. No production data was used by the tests below.
+Status: 本文件为实现期工程记录；所述可靠性基础已随 0.12.0–0.14.0 发布。下文
+中 "not release approval"、"remain pending" 等表述为历史记录，不代表当前发布
+状态。No production data was used by the tests below.
 
 ## Implemented foundation changes
 
@@ -76,6 +76,8 @@ These measurements do not establish NAS scan throughput or network latency.
   found on PATH. A supported race-test environment remains a release gate.
 
 ## Boundaries still requiring work
+
+（历史记录：以下为实现期未完成清单，所列功能已随 0.12.0–0.14.0 发布。）
 
 - Health/recovery center, diagnostics wizard, backup/restore, incremental sync,
   change review, templates and page-aware refresh are not complete.

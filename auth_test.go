@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,9 +44,22 @@ func TestPasswordChangePersistsAndRevokesManagementSessions(t *testing.T) {
 	f, s, h, cookie := authFixture(t)
 	other := authLogin(h, authOldPassword).Result().Cookies()[0]
 	signature := f.s.signature("existing-media")
+	oldEventToken := s.currentEventToken()
 	w := generationPOST(h, cookie, "/api/password", object{"current_password": authOldPassword, "new_password": authNewPassword, "confirm_password": authNewPassword})
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	if s.currentEventToken() == oldEventToken {
+		t.Fatal("password change retained the old event token")
+	}
+	for token, want := range map[string]int{oldEventToken: 401, s.currentEventToken(): 200} {
+		req := httptest.NewRequest("GET", "/api/events/catalog", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, req)
+		if r.Code != want {
+			t.Fatalf("event authentication after password change: got %d, want %d", r.Code, want)
+		}
 	}
 	for _, c := range []*http.Cookie{cookie, other} {
 		req := httptest.NewRequest("GET", "/api/state", nil)
@@ -84,7 +98,22 @@ func TestPasswordChangePersistsAndRevokesManagementSessions(t *testing.T) {
 		t.Fatal("password changed playback signing key")
 	}
 	if s.eventToken != restarted.eventToken {
-		t.Fatal("password changed ingest token")
+		t.Fatal("rotated ingest token did not survive restart")
+	}
+}
+
+func TestCredentialPublicationReportsCommittedSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	want := &adminCredential{Version: 1, Iterations: 600000, Salt: make([]byte, 16), Hash: make([]byte, 32)}
+	syncErr := errors.New("injected directory sync failure")
+	err := writeAdminCredential(dir, want, func(*os.File) error { return syncErr })
+	var published *adminCredentialPublishedError
+	if !errors.As(err, &published) || !errors.Is(err, syncErr) {
+		t.Fatal("publication failure did not report committed credential", err)
+	}
+	got, err := loadAdminCredential(dir)
+	if err != nil || got == nil || got.Version != want.Version {
+		t.Fatal("published credential could not be loaded", err)
 	}
 }
 
@@ -118,10 +147,30 @@ func TestPasswordChangeValidationAndRequestProtection(t *testing.T) {
 }
 
 func TestPasswordAcceptsShortLongAndUnchanged(t *testing.T) {
-	for _, entry := range []struct{ name, password string }{{"one character", "1"}, {"longer than prior limits", strings.Repeat("a", 2048)}, {"unchanged", authOldPassword}} {
+	// Password changes require at least 10 characters (G1-3 fix): a
+	// one-character new password must be rejected with 400 and leave the
+	// current password in place, while long and unchanged passwords are
+	// still accepted and survive a restart.
+	for _, entry := range []struct {
+		name, password string
+		accepted       bool
+	}{
+		{"one character", "1", false},
+		{"longer than prior limits", strings.Repeat("a", 2048), true},
+		{"unchanged", authOldPassword, true},
+	} {
 		t.Run(entry.name, func(t *testing.T) {
 			f, _, h, cookie := authFixture(t)
 			w := generationPOST(h, cookie, "/api/password", object{"current_password": authOldPassword, "new_password": entry.password, "confirm_password": entry.password})
+			if !entry.accepted {
+				if w.Code != 400 {
+					t.Fatal("short password was accepted", w.Code, w.Body.String())
+				}
+				if authLogin(h, authOldPassword).Code != 200 {
+					t.Fatal("rejected change altered the password")
+				}
+				return
+			}
 			if w.Code != 200 || authLogin(h, entry.password).Code != 200 {
 				t.Fatal("chosen password was rejected", w.Code)
 			}
@@ -160,19 +209,92 @@ func TestPasswordSaveFailurePreservesCredentialAndSession(t *testing.T) {
 	}
 }
 
+// generationPOSTFromAddr is generationPOST with an explicit RemoteAddr, so
+// a test can place its requests in a rate-limit bucket of their own instead
+// of silently sharing the bucket the fixture's login already counted into.
+func generationPOSTFromAddr(h http.Handler, cookie *http.Cookie, path, remoteAddr string, body any) *httptest.ResponseRecorder {
+	raw, _ := json.Marshal(body)
+	r := httptest.NewRequest("POST", path, strings.NewReader(string(raw)))
+	r.RemoteAddr = remoteAddr
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
 func TestPasswordChangeRateLimitAndCorruptStorage(t *testing.T) {
 	f, _, h, cookie := authFixture(t)
-	for i := 0; i < 9; i++ {
-		if w := generationPOST(h, cookie, "/api/password", object{"current_password": "wrong", "new_password": authNewPassword, "confirm_password": authNewPassword}); w.Code != 400 {
+	// Drive the limiter from a dedicated source address: the count below is
+	// exactly the ten admitted attempts, independent of the fixture login
+	// (which is counted in the default bucket, not this one).
+	const addr = "198.51.100.23:4321"
+	for i := 0; i < 10; i++ {
+		if w := generationPOSTFromAddr(h, cookie, "/api/password", addr, object{"current_password": "wrong", "new_password": authNewPassword, "confirm_password": authNewPassword}); w.Code != 400 {
 			t.Fatal(i, w.Code)
 		}
 	}
-	if w := generationPOST(h, cookie, "/api/password", object{"current_password": authOldPassword, "new_password": authNewPassword, "confirm_password": authNewPassword}); w.Code != 429 {
+	if w := generationPOSTFromAddr(h, cookie, "/api/password", addr, object{"current_password": authOldPassword, "new_password": authNewPassword, "confirm_password": authNewPassword}); w.Code != 429 {
 		t.Fatal("password attempts not bounded", w.Code)
 	}
 	os.WriteFile(filepath.Join(f.data, "admin-credential.json"), []byte(`{"version":1,"iterations":1}`), 0600)
 	if _, err := newServer(f.s, f.e, f.c, f.data, f.output); err == nil {
 		t.Fatal("corrupt persisted credential fell back to bootstrap password")
+	}
+}
+
+func TestSessionExpiryAndLogoutInvalidateSession(t *testing.T) {
+	_, s, h, cookie := authFixture(t)
+	state := func(c *http.Cookie) int {
+		req := httptest.NewRequest("GET", "/api/state", nil)
+		req.AddCookie(c)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := state(cookie); code != 200 {
+		t.Fatal("fresh session rejected", code)
+	}
+	// Move this session's expiry into the past; the next request must be
+	// rejected and the session dropped.
+	s.mu.Lock()
+	s.sessions[cookie.Value] = time.Now().Add(-time.Minute)
+	s.mu.Unlock()
+	if code := state(cookie); code != 401 {
+		t.Fatal("expired session accepted", code)
+	}
+	fresh := authLogin(h, authOldPassword).Result().Cookies()[0]
+	if code := state(fresh); code != 200 {
+		t.Fatal("re-login rejected", code)
+	}
+	if w := generationPOST(h, fresh, "/api/logout", object{}); w.Code != 200 {
+		t.Fatal("logout failed", w.Code, w.Body.String())
+	}
+	if code := state(fresh); code != 401 {
+		t.Fatal("session survived logout", code)
+	}
+}
+
+func TestLoginRateLimitAppliesToLoginEndpoint(t *testing.T) {
+	f := setup(t)
+	t.Setenv("STRMLINK_ADMIN_PASSWORD", authOldPassword)
+	s, err := newServer(f.s, f.e, f.c, f.data, f.output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.handler()
+	// This Server instance has seen no prior attempts, so its bucket starts
+	// empty and the counts are exact: ten failed logins are admitted, the
+	// eleventh is limited before any password check happens.
+	for i := 1; i <= 10; i++ {
+		if w := authLogin(h, "wrong-password"); w.Code != 401 {
+			t.Fatalf("failed login %d: got %d, want 401", i, w.Code)
+		}
+	}
+	if w := authLogin(h, "wrong-password"); w.Code != 429 {
+		t.Fatal("eleventh login attempt was not rate limited", w.Code)
+	}
+	if w := authLogin(h, authOldPassword); w.Code != 429 {
+		t.Fatal("rate limit did not precede password verification", w.Code)
 	}
 }
 
@@ -188,10 +310,5 @@ func TestServePasswordReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &http.Server{Addr: "127.0.0.1:18796", Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
-	t.Cleanup(func() { server.Close() })
-	t.Log("Synthetic password form fixture http://127.0.0.1:18796")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		t.Fatal(err)
-	}
+	runReviewFixture(t, s.handler(), "synthetic password form")
 }

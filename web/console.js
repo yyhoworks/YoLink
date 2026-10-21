@@ -13,7 +13,9 @@ const failureNames={credentials:'凭据失效',rate_limit:'请求受限',permiss
 function msDate(v){return v?new Date(v).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'时间未记录'}
 function consoleSection(title,body,action){return '<section class="panel console-section"><div class="section-heading"><h2>'+title+'</h2>'+(action||'')+'</div>'+body+'</section>'}
 function consoleRow(title,body,action){return '<div class="console-row"><div><strong>'+title+'</strong><p class="hint">'+body+'</p></div>'+(action||'')+'</div>'}
-function metric(label,value,detail,attrs){return '<button class="console-metric" '+attrs+'><span>'+label+'</span><strong>'+esc(value)+'</strong><small>'+detail+'</small></button>'}
+// attrs only ever receives internal constants (data-* hooks), so it stays raw;
+// label and detail are escaped here so callers never handle it themselves.
+function metric(label,value,detail,attrs){return '<button class="console-metric" '+attrs+'><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong><small>'+esc(detail)+'</small></button>'}
 async function refreshConsole(options={}){
  if($('app').hidden||document.hidden)return;
  const work=[];
@@ -57,7 +59,7 @@ function renderDashboard(){
  tasks+=bad.map(a=>consoleRow('<span class="error">网盘检测失败</span> · '+esc(a.name),esc(d.reports[a.id].error||'请检查凭据和网络'),'<button data-nav="accounts">检查账号</button>')).join('');
  if(d.write_error)tasks+='<p class="error">'+esc(d.write_error)+'</p>';
  const maxValue=Math.max(1,...d.trend.map(v=>v[dashChart]));
- const bars=d.trend.map(v=>'<button class="trend-day" data-trend-day="'+v.day+'" title="'+v.day+'：'+(v.covered?v[dashChart]:'未采集')+'" aria-label="'+v.day+'，'+(v.covered?v[dashChart]:'未采集')+(dashChart==='created'?' 个新增 STRM':' 次请求')+'"><span class="trend-count">'+(v.covered?v[dashChart]:'—')+'</span><span class="trend-column"><span style="height:'+(v.covered&&v[dashChart]?Math.max(6,Math.round(v[dashChart]/maxValue*78)):4)+'px"></span></span><small>'+v.day.slice(5)+'</small></button>').join('');
+ const bars=d.trend.map(v=>{const day=esc(v.day);return '<button class="trend-day" data-trend-day="'+day+'" title="'+day+'：'+(v.covered?v[dashChart]:'未采集')+'" aria-label="'+day+'，'+(v.covered?v[dashChart]:'未采集')+(dashChart==='created'?' 个新增 STRM':' 次请求')+'"><span class="trend-count">'+(v.covered?v[dashChart]:'—')+'</span><span class="trend-column"><span style="height:'+(v.covered&&v[dashChart]?Math.max(6,Math.round(v[dashChart]/maxValue*78)):4)+'px"></span></span><small>'+esc(v.day.slice(5))+'</small></button>'}).join('');
  html+='<div class="dash-middle-grid">'+consoleSection('当前任务与待处理事项',tasks,'<button class="text" data-nav="notifications">查看通知</button>')+consoleSection('运行趋势','<div class="trend-controls"><div class="actions"><button data-chart="created" aria-pressed="'+(dashChart==='created')+'">新增 STRM</button><button data-chart="requests" aria-pressed="'+(dashChart==='requests')+'">入口请求</button></div><label class="inline-label">时间范围<select id="dash-days"><option value="7" '+(dashDays===7?'selected':'')+'>近 7 天</option><option value="30" '+(dashDays===30?'selected':'')+'>近 30 天</option></select></label></div><div class="trend-chart">'+bars+'</div><p class="hint">统计自 '+esc(new Date(d.metrics_since).toLocaleDateString('zh-CN'))+' 启用，之前日期无完整数据。请求统计不代表观看次数。</p>')+'</div>';
  const clouds=d.accounts.length?d.accounts.map(a=>{const p=d.reports[a.id],status=a.disabled?'已停用':!p?.checked?'未检测':p.reachable?'最近检测可用':'最近检测失败';const quota=p?.quota;return consoleRow(esc(a.name)+' <span class="'+(p?.reachable?'good':'muted')+'">'+status+'</span>',esc(names[a.provider]||a.provider)+' · '+(p?.checked?msDate(p.checked*1000):'尚未测试')+(quota?'<br>已用 '+consoleBytes(quota.used)+' / '+consoleBytes(quota.total):'<br>容量未读取或该通道不支持'),'<button data-nav="accounts">管理</button>')}).join(''):'<p class="hint">还没有网盘账号。</p>';
  let direct='<dl class="console-stats"><div><dt>平均解析耗时</dt><dd>'+(s.resolve_total?Math.round(s.resolve_ms/s.resolve_total)+' ms':'—')+'</dd></div><div><dt>上游请求耗时</dt><dd>'+(s.upstream_count?Math.round(s.upstream_ms/s.upstream_count)+' ms':'—')+'</dd></div><div><dt>缓存 / 并发复用</dt><dd>'+s.cache+' 次</dd></div><div><dt>解析失败</dt><dd>'+(s.resolve_total-s.resolved)+' 次</dd></div></dl>';
@@ -116,7 +118,7 @@ function jobExtraDetails(j){
  if(j.resumes)html+='<p class="hint">已从持久断点恢复 '+j.resumes+' 次；成功文件保持不变。</p>';
  if(j.error_kind){const target=j.error_kind==='credentials'?'accounts':j.error_kind==='conflict'?'inventory':j.error_kind==='source'?'config':'settings';html+='<p class="hint">'+esc(failureNames[j.error_kind]||'执行异常')+' · <button class="text" data-nav="'+target+'">前往处理</button></p>'}
  if(j.retry_of)html+='<p class="hint">'+(j.retry_dirs?.length?'本次重扫 '+j.retry_dirs.length+' 个失败或未完成目录':'原任务没有目录断点，本次重扫原范围')+'</p>';
- if(j.dry_run&&j.preview?.length){const labels={new:'待新增',same:'已有相同',conflict:'内容冲突',filtered:'被过滤'};html+='<div class="table-scroll"><table class="preview-table"><thead><tr><th>源文件</th><th>输出位置</th><th>预览结果</th></tr></thead><tbody>'+j.preview.map(v=>'<tr><td><code>'+esc(v.source)+'</code></td><td><code>'+esc(v.output||'—')+'</code></td><td>'+labels[v.outcome]+'</td></tr>').join('')+'</tbody></table></div><p class="hint">最多展示 100 条映射；预览不下载字幕和非媒体文件。</p>'}
+ if(j.dry_run&&j.preview?.length){const labels={new:'待新增',same:'已有相同',conflict:'内容冲突',filtered:'被过滤'};html+='<div class="table-scroll"><table class="preview-table"><thead><tr><th>源文件</th><th>输出位置</th><th>预览结果</th></tr></thead><tbody>'+j.preview.map(v=>'<tr><td><code>'+esc(v.source)+'</code></td><td><code>'+esc(v.output||'—')+'</code></td><td>'+esc(labels[v.outcome]||v.outcome)+'</td></tr>').join('')+'</tbody></table></div><p class="hint">最多展示 100 条映射；预览不下载字幕和非媒体文件。</p>'}
  return html;
 }
 function outputRow(v){
@@ -138,7 +140,7 @@ async function loadInventory(page=1){
   const data=await api('/api/outputs?'+q);if(serial!==inventorySerial)return;inventoryData=data;selectedOutputs.clear();$('inventory-all').checked=false;
   $('inventory-context').hidden=!inventoryMedia;$('inventory-context').textContent=inventoryMedia?'已定位到所选文件 · 点击显示全部文件':'';$('inventory-count').textContent=data.total+' 个登记的 STRM';$('inventory-page').textContent=data.total?data.page+' / '+data.pages+' 页':'暂无文件';$('inventory-prev').disabled=data.page<=1;$('inventory-next').disabled=!data.pages||data.page>=data.pages;
   $('inventory-body').innerHTML=data.items.length?data.items.map(outputRow).join(''):'<tr><td colspan="5" class="empty">没有匹配的文件。生成 STRM 后可在这里查看与体检。</td></tr>';updateOutputSelection();
- }catch(e){$('inventory-error').textContent=e.message;$('inventory-error').hidden=false}finally{$('inventory-body').setAttribute('aria-busy','false')}
+ }catch(e){if(serial!==inventorySerial)return;$('inventory-error').textContent=e.message;$('inventory-error').hidden=false}finally{if(serial===inventorySerial)$('inventory-body').setAttribute('aria-busy','false')}
 }
 async function checkInventory(remote){if(!selectedOutputs.size)throw new Error('请先勾选需要体检的文件');$('inventory-count').textContent=remote?'正在核对云端来源…':'正在核对本地文件…';try{const data=await api('/api/outputs/check',{paths:[...selectedOutputs],remote});await loadInventory(inventoryData.page);toast('已完成 '+data.items.length+' 项体检')}catch(e){$('inventory-count').textContent=inventoryData.total+' 个登记的 STRM · 本次体检未完成';$('inventory-error').textContent=e.message+'。可重新体检，或刷新查看已经保存的结果。';$('inventory-error').hidden=false;throw e}}
 async function loadNotifications(){
@@ -149,8 +151,8 @@ async function loadNotifications(){
   if(view==='notifications')$('notice-list').innerHTML=data.items.length?data.items.map(v=>consoleRow('<span class="'+(v.level==='error'?'error':'')+'">'+esc(v.title)+'</span>'+(!v.read?' <span class="notice-unread">未读</span>':''),esc(v.body)+'<br>'+msDate(v.created))).join(''):'<div class="empty">有新增、生成失败或联动异常时，通知会显示在这里。</div>';
  }catch(error){if(request.current()&&error.name!=='AbortError')throw error;}finally{request.finish();}
 }
-function openConsoleRecords(kind,context={}){
- nav('records');const created=!!context.created;recordsContext=context;recordsSwitch(kind);$('records-search').value='';$('records-account').value='';$('records-days').value=kind==='generation'||context.date?'0':'1';$('records-event').value=created?'strm':kind==='playback'?'play':'';
+function openConsoleRecords(kind,context={}){ // kind is set before nav() so recordsOpen switches exactly once; nav() resets recordsContext, so it is assigned afterwards.
+ recordsKind=kind;nav('records');const created=!!context.created;recordsContext=context;$('records-search').value='';$('records-account').value='';$('records-days').value=kind==='generation'||context.date?'0':'1';$('records-event').value=created?'strm':kind==='playback'?'play':'';
  $('records-outcome').value=context.created?'created':'';delete recordsContext.created;updateRecordContext();recordsLoad();
 }
 function updateRecordContext(){$('record-context').hidden=!Object.keys(recordsContext).length;$('record-context').textContent=Object.keys(recordsContext).length?'已定位到指定规则、任务或日期 · 点击清除':''}
@@ -164,7 +166,7 @@ document.addEventListener('click',event=>{
  if(b.dataset.outputTrace){nav('records');recordsTrace(b.dataset.outputTrace)}
  if(b.dataset.probe&&view==='inventory')nav('playback');
  if(b.dataset.ruleRecords)openConsoleRecords('generation',{rule:b.dataset.ruleRecords});
- if(b.dataset.ruleCopy){const r=ruleBy(b.dataset.ruleCopy);generationEditRule(r.id);genDraft.id='';genDraft.enabled=false;$('gen-rule-enabled').checked=false;$('gen-rule-output').value='';$('gen-rule-name').value=r.name+' 副本';$('gen-editor-title').textContent='复制目录规则';generationScheduleSummary();$('gen-rule-output').focus();toast('副本默认仅手动，请选择新的输出目录')}
+ if(b.dataset.ruleCopy){const r=ruleBy(b.dataset.ruleCopy);if(!r)return;generationEditRule(r.id);genDraft.id='';genDraft.enabled=false;$('gen-rule-enabled').checked=false;$('gen-rule-output').value='';$('gen-rule-name').value=r.name+' 副本';$('gen-editor-title').textContent='复制目录规则';generationScheduleSummary();$('gen-rule-output').focus();toast('副本默认仅手动，请选择新的输出目录')}
  if(b.dataset.ruleCheck)action(b,async()=>{const data=await api('/api/rules/'+b.dataset.ruleCheck+'/check',{});$('gen-check-result').hidden=false;$('gen-check-result').innerHTML='<h3>配置检查</h3>'+data.checks.map(v=>'<p class="'+(v.ok?'good':'error')+'">'+esc(v.name)+'：'+esc(v.note)+'</p>').join('')+'<p class="hint">'+esc(data.note)+'</p>';$('gen-check-result').scrollIntoView({block:'nearest'})});
  if(b.dataset.retryDelivery)action(b,async()=>{await api('/api/deliveries/'+b.dataset.retryDelivery+'/retry',{});await loadIntegrations();if(view==='records'&&recordsKind==='deliveries')await loadRecordDeliveries();toast('联动已加入重试队列')});
 });

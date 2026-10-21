@@ -91,7 +91,7 @@ async function generationPickFolder(purpose){
  if(purpose==='scope'){
   if(!state.rules.length){generationEditRule();return}
   const select=genEl('gen-scope-rule');genSetOptions(select,state.rules.filter(r=>!accountBy(r.account)?.disabled).map(r=>({id:r.id,label:r.name+' · '+(accountBy(r.account)?.name||'')})),select.value);
-  const r=ruleBy(select.value);genFolderAccount=r.account;genTrail=[{id:r.folder,path:r.source_path,name:r.name}];
+  const r=ruleBy(select.value);if(!r)return;genFolderAccount=r.account;genTrail=[{id:r.folder,path:r.source_path,name:r.name}];
  }else{
   if(!genDraft)generationEditRule();if(!genDraft)return;
   genFolderAccount=genEl('gen-rule-account').value;const a=accountBy(genFolderAccount);if(!a)throw new Error('请先添加网盘账号');genTrail=[{id:a.root,path:'/',name:'根目录'}];

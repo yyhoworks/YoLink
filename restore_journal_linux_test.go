@@ -613,6 +613,39 @@ func TestRestoreDiskFullBeforeInstallKeepsOldSet(t *testing.T) {
 	restoreAssertComplete(t, f)
 }
 
+// TestRestoreNoSpaceFaultInjectionKeepsOldSet is the fault-injection
+// equivalent of the tmpfs disk-full tests in this file: it needs no
+// dedicated 64MiB tmpfs, so unlike them it runs in every environment. An
+// ENOSPC-class failure at the reserve and journal-publication points must
+// abort activation, and recovery afterwards must converge to exactly the
+// old or exactly the new set.
+func TestRestoreNoSpaceFaultInjectionKeepsOldSet(t *testing.T) {
+	enospc := &os.PathError{Op: "write", Path: "restore-journal", Err: unix.ENOSPC}
+	for _, point := range []string{"reserve.before_allocate", "journal.installing.before_write", "journal.installed.before_write"} {
+		t.Run(point, func(t *testing.T) {
+			f := restoreRawFixture(t, false)
+			f.m.fault = func(p string) error {
+				if p == point {
+					return enospc
+				}
+				return nil
+			}
+			if _, err := f.m.recoverStartup(context.Background()); !errors.Is(err, enospc) {
+				t.Fatal("ENOSPC fault was not reached", point, err)
+			}
+			f.m.fault = nil
+			if point != "journal.installed.before_write" {
+				// Nothing may have been installed yet: the old set must
+				// still be the active one, byte for byte.
+				if err := f.m.verifyInventory(context.Background(), ".", f.old, true); err != nil {
+					t.Fatal("no-space failure changed the old set", err)
+				}
+			}
+			restoreAssertComplete(t, f)
+		})
+	}
+}
+
 func TestRestoreDiskFullAfterInstallUsesReserveBeforeJournal(t *testing.T) {
 	if os.Getenv("YOLINK_TEST_DISK_FULL") != "1" {
 		t.Skip("dedicated bounded tmpfs only")

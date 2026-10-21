@@ -226,7 +226,12 @@ func (e *Engine) generateScanMedia(ctx context.Context, a Account, r Rule, j *Jo
 	if err != nil {
 		return err
 	}
-	if unchanged && f.Size > 0 && f.Modified != "" {
+	// unchanged already compares the full previous observation (size and
+	// modified included) against the current one, so a field that was
+	// missing last time and is still missing compares equal and may use
+	// the fast path; the registration and on-disk hash checks inside still
+	// anchor the skip decision to the actual output.
+	if unchanged {
 		var owner, registered, raw string
 		err = e.s.db.QueryRowContext(ctx, "SELECT o.media,o.hash,m.payload FROM outputs o JOIN media m ON m.id=o.media WHERE o.path=?", key).Scan(&owner, &registered, &raw)
 		var old Media

@@ -21,7 +21,7 @@ try {
     # evidence. Run the remaining full suite with race instrumentation here;
     # bounded ENOSPC and namespace tests retain their separate explicit gates.
     $script = 'apk add --no-cache gcc musl-dev; mkdir /work/src; tar -xf /work/source.tar -C /work/src; cd /work/src; export GOCACHE=/work/cache GOPATH=/work/gopath CGO_ENABLED=1 GOMAXPROCS=2; go version; gcc --version; go test -race -count=1 -timeout=15m -skip "^(TestRestoreJournalEveryInstallDurabilityFaultConverges|TestRestoreEveryManualRollbackDurabilityFaultConverges)$" ./...; go vet ./...'
-    $command = "/usr/local/bin/docker run --rm --memory=2g --cpu-shares=256 --pids-limit=512 --mount type=bind,src=$remote,dst=/work --entrypoint /bin/sh golang:1.27-alpine -ec '$script'"
+    $command = "/usr/local/bin/docker run --rm --memory=2g --cpu-shares=256 --pids-limit=512 --mount type=bind,src=$remote,dst=/work --entrypoint /bin/sh golang:1.27-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd -ec '$script'"
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $output = @(& ssh @sshArgs $command 2>&1 | ForEach-Object { "$_" })
     $resultCode = $LASTEXITCODE

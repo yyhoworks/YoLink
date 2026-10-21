@@ -84,9 +84,21 @@ function createCleanupScope() {
     pending: (key) => requests.has(key),
     cancel,
     interval(callback, milliseconds) {
-      if (!disposed) intervals.add(setInterval(() => {
-        if (!disposed) callback();
-      }, milliseconds));
+      if (disposed) return () => {
+      };
+      const timer = setInterval(() => {
+        if (disposed) return;
+        try {
+          callback();
+        } catch (error) {
+          console.error("cleanup scope interval callback failed", error);
+        }
+      }, milliseconds);
+      intervals.add(timer);
+      return () => {
+        clearInterval(timer);
+        intervals.delete(timer);
+      };
     },
     dispose() {
       if (disposed) return;
@@ -104,6 +116,19 @@ const names = { "139": "移动云盘 · 新个人云", "139old": "移动云盘 �
 const statusNames = { queued: "排队中", running: "执行中", completed: "已完成", partial: "部分失败", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
 let state = { accounts: [], rules: [], jobs: [], media: [], settings: {} }, view = "dashboard", polling = false, toastTimer;
 const refreshLifecycle = { scope: createCleanupScope(), timer: null, last: 0, failures: 0, epoch: 0, initialized: false };
+let eventTokenCache = null, eventTokenRequest = null;
+function ensureEventToken() {
+  if (eventTokenCache !== null) return Promise.resolve(eventTokenCache);
+  if (!eventTokenRequest) eventTokenRequest = api("/api/settings/event-token").then((data) => {
+    eventTokenCache = data && data.event_token || "";
+    const field = $("event-token");
+    if (field) field.value = eventTokenCache;
+    return eventTokenCache;
+  }).finally(() => {
+    eventTokenRequest = null;
+  });
+  return eventTokenRequest;
+}
 const routes = /* @__PURE__ */ new Set(["dashboard", "inventory", "notifications", "more", "home", "config", "accounts", "files", "directories", "tasks", "playback", "maintenance", "settings", "records"]);
 let routeReady = false, activeRoute = "";
 function writeRoute(route, replace = false) {
@@ -197,6 +222,7 @@ function nav(next, loadFiles = true, context = {}, options = {}) {
   $("global-error").hidden = true;
   if (typeof backupLeave === "function" && next !== "settings") backupLeave();
   if (previousView !== next && typeof consoleLeave === "function") consoleLeave();
+  if (previousView === "maintenance" && previousView !== next && typeof changesLeave === "function") changesLeave();
   document.querySelectorAll(".view").forEach((el) => el.hidden = el.id !== "view-" + next);
   document.querySelectorAll(".sidebar [data-nav]").forEach((el) => {
     const selected = el.dataset.nav === next, parent = el.dataset.nav === "more" && ["files", "inventory", "records", "notifications", "maintenance", "settings"].includes(next);
@@ -306,7 +332,9 @@ function render() {
     if (view === "settings") {
       if (!((_a = $("settings-drawer")) == null ? void 0 : _a.open) && document.activeElement !== $("public-base")) $("public-base").value = state.settings.public_base || "";
       $("output-root").value = state.settings.output_root || "";
-      $("event-token").value = state.event_token || "";
+      if (eventTokenCache === null) ensureEventToken().catch(() => {
+      });
+      else $("event-token").value = eventTokenCache;
       if (!((_b = $("settings-drawer")) == null ? void 0 : _b.open)) renderLegacyEventOptions();
       if (typeof renderSettingsSummary === "function") renderSettingsSummary();
     }
@@ -467,8 +495,15 @@ $("settings-form").addEventListener("submit", (e) => {
   });
 });
 $("copy-event").addEventListener("click", (e) => action(e.currentTarget, async () => {
-  await copy(state.event_token);
+  await copy(await ensureEventToken());
   toast("兼容接入凭据已复制");
+}));
+$("rotate-event").addEventListener("click", (e) => action(e.currentTarget, async () => {
+  const data = await api("/api/settings/event-token/rotate", {});
+  eventTokenCache = data && data.event_token || null;
+  if (eventTokenCache === null) await ensureEventToken();
+  else $("event-token").value = eventTokenCache;
+  toast("凭据已轮换，旧凭据已失效，请同步更新 Hermes 等接入方");
 }));
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
@@ -514,9 +549,10 @@ $("password-form").addEventListener("submit", (event) => {
   action(event.submitter, async () => {
     try {
       await api("/api/password", { current_password: $("current-password").value, new_password: $("new-password").value, confirm_password: $("confirm-password").value });
+      eventTokenCache = null;
       $("password-form").reset();
       showLogin();
-      $("login-notice").textContent = "密码已修改，请使用新密码重新登录。";
+      $("login-notice").textContent = "密码已修改，请使用新密码重新登录。事件令牌已同步轮换，请更新 Hermes 等接入方的凭据。";
       $("login-notice").hidden = false;
       $("password").value = "";
       $("password").focus();

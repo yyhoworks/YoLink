@@ -60,12 +60,20 @@
   }
   apply();
   let lastTrigger=null;
+  let adaptationRoots=null,adaptationFull=false;
   function scheduleAdaptation(mutations){
-    if(!adaptationReady||adaptationTimer||prefs.style!=='glass')return;
+    if(!adaptationReady||prefs.style!=='glass')return;
     if(Array.isArray(mutations)&&mutations.every(m=>{const el=m.target?.nodeType===1?m.target:m.target?.parentElement;return el&&el.closest?.('#bw-task-elapsed,#dash-updated');}))return;
-    adaptationTimer=setTimeout(()=>{adaptationTimer=0;if(!document.hidden)adaptGlassText();},100);
+    // Converge mutation-driven passes to the changed subtrees; calls without
+    // a mutation list (startup, preference or visibility changes) rescan all.
+    if(Array.isArray(mutations)){
+      for(const m of mutations){const el=m.target?.nodeType===1?m.target:m.target?.parentElement;if(el)(adaptationRoots??=new Set()).add(el);}
+    }else adaptationFull=true;
+    if(adaptationTimer)return;
+    adaptationTimer=setTimeout(()=>{adaptationTimer=0;const full=adaptationFull,roots=adaptationRoots;adaptationFull=false;adaptationRoots=null;if(!document.hidden)adaptGlassText(full?null:roots);},100);
   }
-  function adaptGlassText(){
+  const glassSelector='h1,h2,h3,p,small,label,summary,button,a,code,time,dt,dd,th,td,span,strong,input,select,textarea,svg';
+  function adaptGlassText(scopedRoots){
     const light=prefs.glassText==='light';
     const bgSample=light?[[20,40,48]]:[[230,238,244]];
     const helper=typeof window!=='undefined'?window.YoLinkGlassColor:null;
@@ -73,10 +81,8 @@
     root.style.setProperty('--glass-fg-body',colors.body);
     root.style.setProperty('--glass-fg-good',colors.good);
     root.style.setProperty('--glass-fg-danger',colors.danger);
-    document.querySelectorAll('[data-glass-adapted]').forEach(el=>{el.removeAttribute('data-glass-adapted');el.removeAttribute('data-glass-role');});
-    if(prefs.style!=='glass')return;
-    // One saved foreground for the whole workspace; scrolling never changes it.
-    document.querySelectorAll('h1,h2,h3,p,small,label,summary,button,a,code,time,dt,dd,th,td,span,strong,input,select,textarea,svg').forEach(el=>{
+    const clearAdapted=el=>{el.removeAttribute('data-glass-adapted');el.removeAttribute('data-glass-role');};
+    const adapt=el=>{
       if(el.closest('.wallpaper-preview,.style-sample,.palette-swatches,.sidebar'))return;
       const text=Array.from(el.childNodes).some(n=>n.nodeType===3&&n.textContent.trim());
       if(!text&&!el.matches('button,input,select,textarea,svg'))return;
@@ -84,7 +90,26 @@
       const role=primary?'primary':el.closest('.error,.danger')?'danger':el.closest('.good')?'good':'body';
       el.setAttribute('data-glass-adapted',light||primary?'light':'dark');
       el.setAttribute('data-glass-role',role);
-    });
+    };
+    if(!scopedRoots){
+      document.querySelectorAll('[data-glass-adapted]').forEach(clearAdapted);
+      if(prefs.style!=='glass')return;
+      // One saved foreground for the whole workspace; scrolling never changes it.
+      document.querySelectorAll(glassSelector).forEach(adapt);
+      return;
+    }
+    // Scoped pass: an element's role depends only on itself, its direct text
+    // children and its ancestors, and the observer reports no class changes,
+    // so clearing and re-evaluating each changed subtree (root included)
+    // reaches the same result as a full rescan.
+    if(prefs.style!=='glass')return;
+    const roots=[...scopedRoots].filter(el=>el.isConnected&&![...scopedRoots].some(other=>other!==el&&other.contains(el)));
+    for(const scope of roots){
+      if(scope.hasAttribute('data-glass-adapted'))clearAdapted(scope);
+      scope.querySelectorAll('[data-glass-adapted]').forEach(clearAdapted);
+      if(scope.matches(glassSelector))adapt(scope);
+      scope.querySelectorAll(glassSelector).forEach(adapt);
+    }
   }
   function message(text,error=false){
     const target=panel?.querySelector('.skin-status');

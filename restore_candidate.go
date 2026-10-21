@@ -196,9 +196,14 @@ func (m *restoreManager) armPreparedCandidate(ctx context.Context, id, revision 
 	if candidate.ID != id || candidate.Revision != revision || candidate.Revision != restoreRevision(candidate.Inventory) {
 		return errors.New("恢复候选版本已变化")
 	}
-	if _, err := m.validateCandidate(ctx, path.Join(restoreControlName, id, "candidate"), candidate.Inventory); err != nil {
-		return err
-	}
+	// The snapshot content was fully validated at upload time
+	// (prepareCandidate ran validateBackupSnapshot and validateCandidate),
+	// and the candidate has not been touchable since: candidate.json is a
+	// checksummed envelope whose Revision must still match the inventory
+	// revision (checked above), and armCandidate re-verifies every file
+	// against that inventory before journaling anything. Re-running the
+	// full snapshot validation here would only repeat the upload cost —
+	// including per-account credential decryption — on every confirmation.
 	if err := m.armCandidate(ctx, id, revision, candidate.Inventory); err != nil {
 		return err
 	}

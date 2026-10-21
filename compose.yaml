@@ -1,8 +1,11 @@
 name: yolink
 services:
   yolink:
-    image: yolink:0.14.0
+    # 发版时只需改这一处版本号来源：设置环境变量 YOLINK_VERSION，或修改下面的默认值；
+    # 默认值须与 main.go 的 appVersion 保持一致。
+    image: yolink:${YOLINK_VERSION:-0.14.1}
     container_name: yolink
+    user: "${YOLINK_UID:-10001}:${YOLINK_GID:-10001}"
     build:
       context: .
       dockerfile: Dockerfile
@@ -14,13 +17,18 @@ services:
     environment:
       TZ: Asia/Shanghai
       STRMLINK_ADMIN_PASSWORD: ${STRMLINK_ADMIN_PASSWORD:-}
+    # 先按 QUICKSTART.md 初始化目录及权限，再启动。禁止 Docker 自动建立 root 属主目录。
     volumes:
       - type: bind
         source: ./data
         target: /data
+        bind:
+          create_host_path: false
       - type: bind
         source: ${STRMLINK_OUTPUT_DIR:-./strm-test}
         target: /strm
+        bind:
+          create_host_path: false
     read_only: true
     tmpfs:
       - /tmp:size=32m

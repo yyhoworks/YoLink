@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -15,7 +16,9 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -44,10 +47,19 @@ type Providers struct {
 	s      *Store
 	client *http.Client
 	locks  sync.Map
+	// key115 overrides the built-in 115 public key; production leaves it nil
+	// and uses defaultCipher115Public. It exists so isolated tests can run
+	// the download protocol against a key pair they control.
+	key115 *rsa.PublicKey
+	// refreshed139 throttles 139 token refreshes per account (see prepare):
+	// the 15-day early-refresh window would otherwise re-refresh on every
+	// page of a long scan whenever the renewed token stays inside it.
+	refreshMu    sync.Mutex
+	refreshed139 map[string]time.Time
 }
 
 func newProviders(s *Store) *Providers {
-	return &Providers{s: s, client: &http.Client{Timeout: 40 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &Providers{s: s, client: &http.Client{Timeout: 40 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}, refreshed139: map[string]time.Time{}}
 }
 func str(v any) string {
 	if v == nil {
@@ -121,7 +133,10 @@ func (p *Providers) with(ctx context.Context, id string, fn func(*Account) error
 	defer func() {
 		after, _ := json.Marshal(a.Secrets)
 		if !bytes.Equal(before, after) {
-			if e := p.s.saveAccount(a); e != nil {
+			if e := p.s.saveAccount(a); e != nil && err == nil {
+				// Only a successful operation may be reclassified as a
+				// storage failure; when fn already failed, keep its error
+				// so health classification reflects the real cause.
 				err = &CloudError{Kind: "storage", Code: "credential_save", Message: "凭据续期后保存失败，请检查数据卷"}
 			}
 		}
@@ -135,18 +150,36 @@ func (p *Providers) request(ctx context.Context, method, u string, body any, hea
 	return p.requestCookies(ctx, method, u, body, headers, nil)
 }
 func (p *Providers) requestCookies(ctx context.Context, method, u string, body any, headers http.Header, receive func([]*http.Cookie)) (object, error) {
-	// A small per-request delay keeps recursive scans from flooding provider APIs.
-	timer := time.NewTimer(180 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
+	return p.doRequest(ctx, method, u, body, headers, receive, false)
+}
+
+// requestRead is requestCookies for read-only provider queries (directory
+// listing and download resolution). Transient failures are retried with
+// backoff so one rate-limit response cannot fail a whole scan or playback
+// start. Never route credential refresh or other secret-rotating calls
+// through it: a lost response would make a retry reuse stale secrets.
+func (p *Providers) requestRead(ctx context.Context, method, u string, body any, headers http.Header, receive func([]*http.Cookie)) (object, error) {
+	return p.doRequest(ctx, method, u, body, headers, receive, true)
+}
+
+func retryableCloud(err error) bool {
+	var cloud *CloudError
+	return errors.As(err, &cloud) && cloud.Retryable
+}
+
+func retryBackoff(err error, attempt int) time.Duration {
+	var cloud *CloudError
+	if errors.As(err, &cloud) && cloud.RetryAfter > 0 {
+		return min(cloud.RetryAfter, 5*time.Second)
 	}
+	return 300 * time.Millisecond << (attempt - 1)
+}
+
+func (p *Providers) doRequest(ctx context.Context, method, u string, body any, headers http.Header, receive func([]*http.Cookie), retry bool) (object, error) {
 	var raw []byte
-	var e error
 	contentType := "application/json"
 	if body != nil {
+		var e error
 		if form, ok := body.(url.Values); ok {
 			raw = []byte(form.Encode())
 			contentType = "application/x-www-form-urlencoded"
@@ -157,6 +190,42 @@ func (p *Providers) requestCookies(ctx context.Context, method, u string, body a
 			return nil, e
 		}
 	}
+	attempts := 1
+	if retry {
+		attempts = 3
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(retryBackoff(lastErr, attempt))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		out, err := p.doRequestOnce(ctx, method, u, raw, contentType, body != nil, headers, receive)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if !retry || !retryableCloud(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (p *Providers) doRequestOnce(ctx context.Context, method, u string, raw []byte, contentType string, hasBody bool, headers http.Header, receive func([]*http.Cookie)) (object, error) {
+	// A small per-request delay keeps recursive scans from flooding provider APIs.
+	timer := time.NewTimer(180 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
 	req, e := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(raw))
 	if e != nil {
 		return nil, errors.New("无效的网盘接口地址")
@@ -166,7 +235,7 @@ func (p *Providers) requestCookies(ctx context.Context, method, u string, body a
 		req.Header = make(http.Header)
 	}
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
+	if hasBody {
 		req.Header.Set("Content-Type", contentType)
 	}
 	if req.Header.Get("User-Agent") == "" {
@@ -183,14 +252,24 @@ func (p *Providers) requestCookies(ctx context.Context, method, u string, body a
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, cloudHTTPError(resp.StatusCode, resp.Header.Get("Retry-After"), time.Now())
 	}
-	b, e := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	// Provider JSON answers are small (one page or one ticket); cap the body
+	// well below the old 16MB and require exactly one JSON value so trailing
+	// garbage from a confused upstream cannot be accepted silently.
+	b, e := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
 	if e != nil {
 		return nil, networkError(e)
+	}
+	if len(b) > 4<<20 {
+		return nil, cloudProtocolError("网盘接口响应过大")
 	}
 	var out object
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 	if dec.Decode(&out) != nil || out == nil {
+		return nil, cloudProtocolError("网盘接口响应格式异常")
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
 		return nil, cloudProtocolError("网盘接口响应格式异常")
 	}
 	return out, nil
@@ -213,7 +292,11 @@ func queryURL(base string, q map[string]string) string {
 }
 func apiSuccess(r object) error {
 	if c := str(r["code"]); c != "" && c != "0" && c != "200" {
-		return cloudAPIError(c)
+		// The generic "code" field is provider-specific business data; some
+		// providers use numbers that merely look like HTTP statuses (e.g.
+		// "500" for a business refusal), so it must not inherit HTTP
+		// semantics. Only the "status" field below mirrors HTTP status.
+		return cloudBusinessError(c)
 	}
 	if c := num(r["errno"]); c != 0 {
 		return &CloudError{Kind: "other", Code: strconv.FormatInt(c, 10), Message: fmt.Sprintf("网盘接口错误 %d，请检查账号权益或通道状态", c)}
@@ -250,8 +333,16 @@ func (p *Providers) prepare(ctx context.Context, a *Account) error {
 				if exp < time.Now().UnixMilli() {
 					return errors.New("移动 Authorization 已过期，请重新从官网登录后导入")
 				}
-				if e = p.refresh139(ctx, a, parts); e != nil {
-					return e
+				// prepare runs once per page during a scan; if the renewed
+				// token still lands inside the 15-day window, refreshing on
+				// every page would flood the refresh endpoint. Refresh at
+				// most once per hour per account (in-process state only, so
+				// the throttle itself never triggers a credential write).
+				if !p.throttled139(a.ID) {
+					if e = p.refresh139(ctx, a, parts); e != nil {
+						return e
+					}
+					p.markRefreshed139(a.ID)
 				}
 			}
 		}
@@ -303,6 +394,22 @@ func (p *Providers) prepare(ctx context.Context, a *Account) error {
 	}
 	return nil
 }
+func (p *Providers) throttled139(id string) bool {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+	last, ok := p.refreshed139[id]
+	return ok && time.Since(last) < time.Hour
+}
+
+func (p *Providers) markRefreshed139(id string) {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+	if p.refreshed139 == nil {
+		p.refreshed139 = map[string]time.Time{}
+	}
+	p.refreshed139[id] = time.Now()
+}
+
 func (p *Providers) refresh139(ctx context.Context, a *Account, parts []string) error {
 	var escaped bytes.Buffer
 	_ = xml.EscapeText(&escaped, []byte(parts[2]))
@@ -333,6 +440,21 @@ func (p *Providers) refresh139(ctx context.Context, a *Account, parts []string) 
 	if x.Return != "0" || x.Token == "" {
 		return &CloudError{Kind: "other", Code: "refresh_rejected", Message: "移动续期请求未成功，请核对账号与通道状态"}
 	}
+	// Validate the renewed token with the same rules prepare() parses by
+	// before replacing the stored credential: if the refresh service ever
+	// changes its response shape, keep the old (still working) token instead
+	// of persisting a value the next prepare() would reject outright.
+	if original := strings.Split(parts[2], "|"); len(original) >= 4 {
+		renewed := strings.Split(x.Token, "|")
+		valid := false
+		if len(renewed) >= 4 {
+			exp, perr := strconv.ParseInt(renewed[3], 10, 64)
+			valid = perr == nil && exp > 0
+		}
+		if !valid {
+			return &CloudError{Kind: "protocol", Code: "refresh_shape", Message: "移动续期返回的令牌格式异常，已保留原凭据，请稍后重试"}
+		}
+	}
 	a.Secrets["authorization"] = base64.StdEncoding.EncodeToString([]byte(parts[0] + ":" + parts[1] + ":" + x.Token))
 	return nil
 }
@@ -351,7 +473,7 @@ func (p *Providers) mobile(ctx context.Context, a *Account, u string, body any) 
 	ts := time.Now().In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")
 	nonce := randomID()[:16]
 	h := headers(map[string]string{"Authorization": "Basic " + a.Secrets["authorization"], "Caller": "web", "CMS-DEVICE": "default", "Mcloud-Channel": "1000101", "Mcloud-Client": "10701", "Mcloud-Route": "001", "Mcloud-Sign": ts + "," + nonce + "," + mobileSign(string(raw), ts, nonce), "Mcloud-Version": "7.14.0", "Origin": "https://yun.139.com", "Referer": "https://yun.139.com/w/", "x-DeviceInfo": "||9|7.14.0|chrome|120.0.0.0|||windows 10||zh-CN|||", "x-huawei-channelSrc": "10000034", "x-inner-ntwk": "2", "x-m4c-caller": "PC", "x-m4c-src": "10002", "x-SvcType": "1", "X-Yun-Api-Version": "v1", "X-Yun-App-Channel": "10000034", "X-Yun-Channel-Source": "10000034", "X-Yun-Client-Info": "||9|7.14.0|chrome|120.0.0.0|||windows 10||zh-CN|||dW5kZWZpbmVk||", "X-Yun-Module-Type": "100", "X-Yun-Svc-Type": "1"})
-	r, e := p.request(ctx, "POST", u, body, h)
+	r, e := p.requestRead(ctx, "POST", u, body, h, nil)
 	if e != nil {
 		return nil, e
 	}
@@ -366,7 +488,7 @@ func (p *Providers) quark(ctx context.Context, a *Account, method, path string, 
 	}
 	q["pr"] = "ucpro"
 	q["fr"] = "pc"
-	r, e := p.requestCookies(ctx, method, queryURL("https://drive.quark.cn/1/clouddrive"+path, q), body, headers(map[string]string{"Cookie": a.Secrets["cookie"], "Referer": "https://pan.quark.cn/", "User-Agent": quarkUA}), func(cookies []*http.Cookie) {
+	r, e := p.requestRead(ctx, method, queryURL("https://drive.quark.cn/1/clouddrive"+path, q), body, headers(map[string]string{"Cookie": a.Secrets["cookie"], "Referer": "https://pan.quark.cn/", "User-Agent": quarkUA}), func(cookies []*http.Cookie) {
 		for _, c := range cookies {
 			if c.Name != "__puus" && c.Name != "__pus" {
 				continue
@@ -406,7 +528,7 @@ func (p *Providers) tv(ctx context.Context, a *Account, path string, q map[strin
 	}
 	q["access_token"] = a.Secrets["access_token"]
 	q["req_id"] = hex.EncodeToString(rid[:])
-	r, e := p.request(ctx, "GET", queryURL("https://open-api-drive.quark.cn"+path, q), nil, headers(map[string]string{"User-Agent": quarkTVUA, "x-pan-tm": ts, "x-pan-token": hex.EncodeToString(hash[:]), "x-pan-client-id": "d3194e61504e493eb6222857bccfed94"}))
+	r, e := p.requestRead(ctx, "GET", queryURL("https://open-api-drive.quark.cn"+path, q), nil, headers(map[string]string{"User-Agent": quarkTVUA, "x-pan-tm": ts, "x-pan-token": hex.EncodeToString(hash[:]), "x-pan-client-id": "d3194e61504e493eb6222857bccfed94"}), nil)
 	if e != nil {
 		return nil, e
 	}
@@ -415,6 +537,31 @@ func (p *Providers) tv(ctx context.Context, a *Account, path string, q map[strin
 func tvDevice(a *Account) map[string]string {
 	return map[string]string{"device_id": a.Secrets["device_id"], "app_ver": "1.8.2.2", "device_brand": "Xiaomi", "platform": "tv", "device_name": "M2004J7AC", "device_model": "M2004J7AC", "build_device": "M2004J7AC", "build_product": "M2004J7AC", "device_gpu": "Adreno (TM) 550", "activity_rect": "{}", "channel": "GENERAL"}
 }
+
+// validateRefreshEndpoint guards the one place where a long-lived
+// credential (the Quark TV refresh_token) is sent to a user-configured URL.
+// Official Quark hosts are trusted by name; anything else must resolve
+// exclusively to public addresses, using the same non-public definition as
+// the media client, so the token can never be posted to a LAN or loopback
+// service by a crafted or mistyped account configuration.
+func validateRefreshEndpoint(ctx context.Context, u *url.URL) error {
+	host := u.Hostname()
+	if host == "quark.cn" || strings.HasSuffix(host, ".quark.cn") {
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return errors.New("TV 续期服务地址无法解析，已拒绝发送续期凭据")
+	}
+	for _, v := range ips {
+		addr, ok := netip.AddrFromSlice(v.IP)
+		if !ok || isNonPublicIP(addr) {
+			return errors.New("TV 续期服务地址指向内网或本机地址，已拒绝发送续期凭据；自建续期服务请使用公网 HTTPS 地址")
+		}
+	}
+	return nil
+}
+
 func (p *Providers) refreshTV(ctx context.Context, a *Account) error {
 	endpoint := a.Secrets["refresh_endpoint"]
 	if endpoint == "" {
@@ -423,6 +570,9 @@ func (p *Providers) refreshTV(ctx context.Context, a *Account) error {
 	u, e := url.Parse(endpoint)
 	if e != nil || u.Scheme != "https" || u.Host == "" {
 		return errors.New("TV 续期服务必须为 HTTPS 地址")
+	}
+	if e := validateRefreshEndpoint(ctx, u); e != nil {
+		return e
 	}
 	if a.Secrets["refresh_token"] == "" {
 		return errors.New("请填写夸克 TV Refresh Token")
@@ -473,7 +623,7 @@ func (p *Providers) refreshAli(ctx context.Context, a *Account) error {
 	return nil
 }
 func (p *Providers) ali(ctx context.Context, a *Account, path string, body any) (object, error) {
-	r, e := p.request(ctx, "POST", "https://openapi.alipan.com"+path, body, headers(map[string]string{"Authorization": "Bearer " + a.Secrets["access_token"]}))
+	r, e := p.requestRead(ctx, "POST", "https://openapi.alipan.com"+path, body, headers(map[string]string{"Authorization": "Bearer " + a.Secrets["access_token"]}), nil)
 	if e != nil {
 		return nil, e
 	}
@@ -481,6 +631,18 @@ func (p *Providers) ali(ctx context.Context, a *Account, path string, body any) 
 }
 
 func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Entry, err error) {
+	return p.list(ctx, aid, parent, 0)
+}
+
+// ListFirstPage returns only the first page of a directory. Connection
+// checks use it to prove reachability and credential validity without
+// paging through a huge root folder (115 alone spends ~1s per page in
+// mandatory throttling, so a full listing cannot fit the check timeout).
+func (p *Providers) ListFirstPage(ctx context.Context, aid, parent string) (entries []Entry, err error) {
+	return p.list(ctx, aid, parent, 1)
+}
+
+func (p *Providers) list(ctx context.Context, aid, parent string, maxPages int) (entries []Entry, err error) {
 	observe := p.beginCloudObservation(ctx, aid, "list")
 	defer func() { observe(err) }()
 	entries = []Entry{}
@@ -657,6 +819,9 @@ func (p *Providers) List(ctx context.Context, aid, parent string) (entries []Ent
 			return nil, err
 		}
 		if done {
+			return entries, nil
+		}
+		if maxPages > 0 && page+1 >= maxPages {
 			return entries, nil
 		}
 	}

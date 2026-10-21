@@ -12,10 +12,21 @@ import (
 	"math/big"
 )
 
-var cipher115Public = func() *rsa.PublicKey {
+// defaultCipher115Public is 115's protocol public key (see file header).
+// Providers may carry an override in their key115 field; production code
+// never sets it, isolated tests use it to run the protocol against a key
+// pair they control instead of mutating this package-level value.
+var defaultCipher115Public = func() *rsa.PublicKey {
 	n, _ := new(big.Int).SetString("8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b8602136477198a6e2683149659bd122c33592fdb5ad47944ad1ea4d36c6b172aad6338c3bb6ac6227502d010993ac967d1aef00f0c8e038de2e4d3bc2ec368af2e9f10a6f1eda4f7262f136420c07c331b871bf139f74f3010e3c4fe57df3afb71683", 16)
 	return &rsa.PublicKey{N: n, E: 65537}
 }()
+
+func (p *Providers) public115() *rsa.PublicKey {
+	if p != nil && p.key115 != nil {
+		return p.key115
+	}
+	return defaultCipher115Public
+}
 
 var cipher115Seed = [...]byte{
 	0xf0, 0xe5, 0x69, 0xae, 0xbf, 0xdc, 0xbf, 0x8a, 0x1a, 0x45, 0xe8, 0xbe, 0x7d, 0xa6, 0x73, 0xb8,
@@ -31,6 +42,16 @@ var cipher115Seed = [...]byte{
 var cipher115ClientKey = []byte{0x78, 0x06, 0xad, 0x4c, 0x33, 0x86, 0x5d, 0x18, 0x4c, 0x01, 0x3f, 0x46}
 
 func derive115Key(seed []byte, size int) []byte {
+	// The indexing below reaches cipher115Seed[size*(size-1)] and seed[size-1];
+	// only sizes 4 and 12 (with a 16-byte seed) are ever used. Guard the
+	// domain instead of panicking on a future misuse: an out-of-domain size
+	// yields a zero key, which simply fails the protocol round-trip.
+	if size < 1 || size > 12 || len(seed) < size {
+		if size < 0 {
+			size = 0
+		}
+		return make([]byte, size)
+	}
 	key := make([]byte, size)
 	for i := range key {
 		key[i] = (seed[i] + cipher115Seed[size*i]) ^ cipher115Seed[size*(size-i-1)]
@@ -53,14 +74,22 @@ func reverse115(data []byte) {
 	}
 }
 func encode115(input []byte, key [16]byte) (string, error) {
+	return encode115WithKey(input, key, defaultCipher115Public)
+}
+
+func (p *Providers) encode115(input []byte, key [16]byte) (string, error) {
+	return encode115WithKey(input, key, p.public115())
+}
+
+func encode115WithKey(input []byte, key [16]byte, pub *rsa.PublicKey) (string, error) {
 	buf := append(append([]byte{}, key[:]...), input...)
 	xor115(buf[16:], derive115Key(key[:], 4))
 	reverse115(buf[16:])
 	xor115(buf[16:], cipher115ClientKey)
 	var encrypted []byte
 	for len(buf) > 0 {
-		n := min(len(buf), cipher115Public.Size()-11)
-		block, err := rsa.EncryptPKCS1v15(rand.Reader, cipher115Public, buf[:n])
+		n := min(len(buf), pub.Size()-11)
+		block, err := rsa.EncryptPKCS1v15(rand.Reader, pub, buf[:n])
 		if err != nil {
 			return "", errors.New("115 下载请求编码失败")
 		}
@@ -69,23 +98,41 @@ func encode115(input []byte, key [16]byte) (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(encrypted), nil
 }
+
 func decode115(input string, key [16]byte) ([]byte, error) {
+	return decode115WithKey(input, key, defaultCipher115Public)
+}
+
+func (p *Providers) decode115(input string, key [16]byte) ([]byte, error) {
+	return decode115WithKey(input, key, p.public115())
+}
+
+func decode115WithKey(input string, key [16]byte, pub *rsa.PublicKey) ([]byte, error) {
 	invalid := errors.New("115 下载响应编码异常，请稍后重试")
 	data, err := base64.StdEncoding.DecodeString(input)
-	size := cipher115Public.Size()
+	size := pub.Size()
 	if err != nil || len(data) == 0 || len(data) > 1<<20 || len(data)%size != 0 {
 		return nil, invalid
 	}
 	var decoded []byte
 	for len(data) > 0 {
 		x := new(big.Int).SetBytes(data[:size])
-		if x.Cmp(cipher115Public.N) >= 0 {
+		if x.Cmp(pub.N) >= 0 {
 			return nil, invalid
 		}
-		block := new(big.Int).Exp(x, big.NewInt(int64(cipher115Public.E)), cipher115Public.N).FillBytes(make([]byte, size))
+		block := new(big.Int).Exp(x, big.NewInt(int64(pub.E)), pub.N).FillBytes(make([]byte, size))
 		separator := bytes.IndexByte(block[2:], 0) + 2
 		if block[0] != 0 || (block[1] != 1 && block[1] != 2) || separator < 10 {
 			return nil, invalid
+		}
+		if block[1] == 1 {
+			// Type 1 padding must be all 0xFF up to the separator; type 2
+			// padding is random non-zero bytes and needs no such check.
+			for _, b := range block[2:separator] {
+				if b != 0xff {
+					return nil, invalid
+				}
+			}
 		}
 		decoded = append(decoded, block[separator+1:]...)
 		data = data[size:]

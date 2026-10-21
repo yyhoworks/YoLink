@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -20,6 +21,13 @@ type adminCredential struct {
 	Salt       []byte `json:"salt"`
 	Hash       []byte `json:"hash"`
 }
+
+// Publication has already replaced the credential even if the following
+// directory sync fails. Callers updating live authentication must adopt it.
+type adminCredentialPublishedError struct{ err error }
+
+func (e *adminCredentialPublishedError) Error() string { return e.err.Error() }
+func (e *adminCredentialPublishedError) Unwrap() error { return e.err }
 
 func loadAdminCredential(data string) (*adminCredential, error) {
 	raw, err := os.ReadFile(filepath.Join(data, "admin-credential.json"))
@@ -37,6 +45,10 @@ func loadAdminCredential(data string) (*adminCredential, error) {
 }
 
 func saveAdminCredential(data string, c *adminCredential) error {
+	return writeAdminCredential(data, c, temporaryDirectorySync)
+}
+
+func writeAdminCredential(data string, c *adminCredential, syncDirectory func(*os.File) error) error {
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -57,7 +69,19 @@ func saveAdminCredential(data string, c *adminCredential) error {
 	if closed != nil {
 		return closed
 	}
-	return os.Rename(f.Name(), filepath.Join(data, "admin-credential.json"))
+	if err := os.Rename(f.Name(), filepath.Join(data, "admin-credential.json")); err != nil {
+		return err
+	}
+	// Sync the parent directory so the rename itself survives a power loss.
+	d, err := os.Open(data)
+	if err != nil {
+		return &adminCredentialPublishedError{err}
+	}
+	defer d.Close()
+	if err := syncDirectory(d); err != nil {
+		return &adminCredentialPublishedError{err}
+	}
+	return nil
 }
 
 // Caller holds authMu until any login session is issued or revoked.
@@ -71,16 +95,62 @@ func (s *Server) passwordMatches(password string) bool {
 	return err == nil && hmac.Equal(hash, c.Hash)
 }
 
+// authAttemptKey aggregates IPv6 sources by their /64 prefix so one attacker
+// cannot mint fresh counters per address; IPv4 and non-IP hosts are unchanged.
+func authAttemptKey(host string) string {
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() != nil {
+		return host
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String()
+}
+
+// pruneAttemptsLocked first drops timestamps outside the one-minute window
+// (and keys left empty), then, only if the table is still oversized, evicts
+// the keys whose latest attempt is oldest. It never resets live counters the
+// way a wholesale clear did. Caller holds s.mu.
+func (s *Server) pruneAttemptsLocked(now time.Time) {
+	for k, list := range s.attempts {
+		kept := make([]time.Time, 0, len(list))
+		for _, t := range list {
+			if now.Sub(t) < time.Minute {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.attempts, k)
+		} else {
+			s.attempts[k] = kept
+		}
+	}
+	if len(s.attempts) <= 4096 {
+		return
+	}
+	type entry struct {
+		key  string
+		last time.Time
+	}
+	entries := make([]entry, 0, len(s.attempts))
+	for k, list := range s.attempts {
+		entries = append(entries, entry{k, list[len(list)-1]})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].last.Before(entries[j].last) })
+	for _, e := range entries[:len(entries)-4096] {
+		delete(s.attempts, e.key)
+	}
+}
+
 func (s *Server) allowAuthAttempt(r *http.Request) bool {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if host == "" {
 		host = r.RemoteAddr
 	}
+	key := authAttemptKey(host)
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	recent := []time.Time{}
-	for _, t := range s.attempts[host] {
+	for _, t := range s.attempts[key] {
 		if now.Sub(t) < time.Minute {
 			recent = append(recent, t)
 		}
@@ -88,10 +158,8 @@ func (s *Server) allowAuthAttempt(r *http.Request) bool {
 	if len(recent) >= 10 {
 		return false
 	}
-	if len(s.attempts) > 4096 {
-		clear(s.attempts)
-	}
-	s.attempts[host] = append(recent, now)
+	s.pruneAttemptsLocked(now)
+	s.attempts[key] = append(recent, now)
 	return true
 }
 
@@ -119,6 +187,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "新密码不能为空")
 		return
 	}
+	if len([]rune(in.New)) < 10 {
+		fail(w, 400, "新密码至少需要 10 个字符")
+		return
+	}
 	if in.New != in.Confirm {
 		fail(w, 400, "两次输入的新密码不一致")
 		return
@@ -130,7 +202,13 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	c.Hash, err = pbkdf2.Key(sha256.New, in.New, c.Salt, c.Iterations, 32)
-	if err != nil || saveAdminCredential(s.s.dir, c) != nil {
+	if err != nil {
+		fail(w, 500, "密码更新失败，请重试")
+		return
+	}
+	saveErr := saveAdminCredential(s.s.dir, c)
+	var published *adminCredentialPublishedError
+	if saveErr != nil && !errors.As(saveErr, &published) {
 		fail(w, 500, "密码保存失败，请检查数据目录权限后重试")
 		return
 	}
@@ -138,6 +216,18 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	clear(s.sessions)
 	s.mu.Unlock()
+	// A password change is the recovery path for a compromised credential set,
+	// so the legacy event token is rotated along with it; the old token stops
+	// working immediately.
+	rotateErr := s.rotateEventToken()
 	http.SetCookie(w, &http.Cookie{Name: "strmlink_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+	if rotateErr != nil {
+		fail(w, 500, "密码已更新，但事件令牌轮换失败，请稍后在接入设置中手动轮换")
+		return
+	}
+	if saveErr != nil {
+		fail(w, 500, "密码已更新，请使用新密码重新登录；目录持久化确认失败，请检查数据磁盘。事件令牌已轮换，请更新接入方凭据")
+		return
+	}
 	jsonOut(w, 200, object{"ok": true})
 }

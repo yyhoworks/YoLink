@@ -24,7 +24,18 @@ type IngestEvent struct {
 }
 
 func (s *Store) ingestEvents() ([]IngestEvent, error) {
-	rows, e := s.db.Query(`SELECT i.id,i.rule,i.source_path,COALESCE(j.status,i.status),i.job,i.error,i.created,i.revision FROM ingest_events i LEFT JOIN jobs j ON j.id=i.job ORDER BY i.created DESC LIMIT 30`)
+	return s.ingestEventsFiltered(nil)
+}
+
+// ingestEventsFiltered is ingestEvents with a rule predicate applied BEFORE
+// the result is truncated to the newest 30 matches. Combining the old
+// global LIMIT 30 with caller-side rule filtering let one busy rule's
+// events crowd every other rule out of a per-rule client's view. The table
+// holds one row per (rule, directory) — the event ID is a deterministic
+// hash of both — so scanning without a SQL limit stays bounded, and
+// iteration stops as soon as 30 matches are collected.
+func (s *Store) ingestEventsFiltered(allow func(rule string) bool) ([]IngestEvent, error) {
+	rows, e := s.db.Query(`SELECT i.id,i.rule,i.source_path,COALESCE(j.status,i.status),i.job,i.error,i.created,i.revision FROM ingest_events i LEFT JOIN jobs j ON j.id=i.job ORDER BY i.created DESC`)
 	if e != nil {
 		return nil, e
 	}
@@ -35,7 +46,13 @@ func (s *Store) ingestEvents() ([]IngestEvent, error) {
 		if e = rows.Scan(&v.ID, &v.Rule, &v.Path, &v.Status, &v.Job, &v.Error, &v.Created, &v.Revision); e != nil {
 			return nil, e
 		}
+		if allow != nil && !allow(v.Rule) {
+			continue
+		}
 		out = append(out, v)
+		if len(out) >= 30 {
+			break
+		}
 	}
 	return out, rows.Err()
 }
@@ -75,7 +92,16 @@ func (s *Server) ingestEvent(w http.ResponseWriter, r *http.Request, in jobReque
 	}
 	sum := sha256.Sum256([]byte(rule.ID + "\x00" + source))
 	id := hex.EncodeToString(sum[:16])
-	_, e = s.s.db.Exec(`INSERT INTO ingest_events(id,rule,source_path,status,job,error,created,revision) VALUES(?,?,?,'pending','','',?,1) ON CONFLICT(id) DO UPDATE SET status='pending',job='',error='',created=excluded.created,revision=ingest_events.revision+1`, id, rule.ID, source, time.Now().Unix())
+	// Only a finished event may be re-armed: a failed one, or a submitted
+	// one whose scan job is no longer queued/running — the terminal state
+	// lives on the job row, and a finished job never runs again. Resetting
+	// a pending, queued or running event here would let a duplicate or
+	// replayed notification detach the in-flight job and orphan its scan.
+	_, e = s.s.db.Exec(`INSERT INTO ingest_events(id,rule,source_path,status,job,error,created,revision) VALUES(?,?,?,'pending','','',?,1) ON CONFLICT(id) DO UPDATE SET
+		status=CASE WHEN ingest_events.status='failed' OR (ingest_events.status='submitted' AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id=ingest_events.job AND jobs.status IN ('queued','running'))) THEN 'pending' ELSE ingest_events.status END,
+		job=CASE WHEN ingest_events.status='failed' OR (ingest_events.status='submitted' AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id=ingest_events.job AND jobs.status IN ('queued','running'))) THEN '' ELSE ingest_events.job END,
+		error=CASE WHEN ingest_events.status='failed' OR (ingest_events.status='submitted' AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id=ingest_events.job AND jobs.status IN ('queued','running'))) THEN '' ELSE ingest_events.error END,
+		created=excluded.created,revision=ingest_events.revision+1`, id, rule.ID, source, time.Now().Unix())
 	if e != nil {
 		fail(w, 500, "入库事件保存失败")
 		return
@@ -137,7 +163,7 @@ func (e *Engine) processIngest() {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(e.ctx, 90*time.Second)
-		folder, er := e.folderAtPath(ctx, r, v.Path)
+		folder, er := e.folderAtPathRetry(ctx, r, v.Path)
 		cancel()
 		if er != nil {
 			if e.ctx.Err() == nil {
@@ -172,6 +198,41 @@ func (e *Engine) ingestFail(v IngestEvent, message string) {
 		e.queueNotifications(fmt.Sprintf("ingest:%s:%d", v.ID, v.Revision), object{"title": "目录读取失败", "text": body, "event": "ingest_failed", "path": v.Path})
 	}
 }
+
+// folderAtPath error classification: a same-named directory already exists
+// in the cloud, so the target is ambiguous no matter how long we wait —
+// that error is deterministic and must not be retried. The directory not
+// having appeared yet, and any List failure (network, token refresh), are
+// transient: the notification typically races the upload that creates the
+// directory.
+var (
+	errIngestDirNotFound   = errors.New("入库目录尚未出现在网盘，请稍后重试事件")
+	errIngestDirAmbiguous  = errors.New("云端存在同名目录，无法确定入库位置")
+	ingestLocateRetryWaits = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+)
+
+// folderAtPathRetry retries folderAtPath a few times with growing backoff
+// for transient failures only; a deterministic ambiguity fails at once, and
+// exhausting the retries returns the last error so the caller marks the
+// event failed exactly as before.
+func (e *Engine) folderAtPathRetry(ctx context.Context, r Rule, source string) (string, error) {
+	folder, err := e.folderAtPath(ctx, r, source)
+	for _, wait := range ingestLocateRetryWaits {
+		if err == nil || errors.Is(err, errIngestDirAmbiguous) {
+			return folder, err
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+		folder, err = e.folderAtPath(ctx, r, source)
+	}
+	return folder, err
+}
+
 func (e *Engine) folderAtPath(ctx context.Context, r Rule, source string) (string, error) {
 	if source == r.SourcePath {
 		return r.Folder, nil
@@ -187,13 +248,13 @@ func (e *Engine) folderAtPath(ctx context.Context, r Rule, source string) (strin
 		for _, f := range files {
 			if f.Dir && f.Name == name {
 				if found != "" {
-					return "", errors.New("云端存在同名目录，无法确定入库位置")
+					return "", errIngestDirAmbiguous
 				}
 				found = f.ID
 			}
 		}
 		if found == "" {
-			return "", errors.New("入库目录尚未出现在网盘，请稍后重试事件")
+			return "", errIngestDirNotFound
 		}
 		current = found
 	}

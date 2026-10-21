@@ -20,6 +20,36 @@ func (c *measuredScanCloud) List(ctx context.Context, account, folder string) ([
 	return c.Clouds.List(ctx, account, folder)
 }
 
+// TestIncrementalRescanListsRootOnceAndSkipsUnchanged is the always-on,
+// small-scale counterpart of the opt-in evidence run below: an incremental
+// rescan of unchanged files must list the root exactly once and skip every
+// file, so a fast-path regression fails an ordinary test run instead of
+// going unnoticed between manual measurements.
+func TestIncrementalRescanListsRootOnceAndSkipsUnchanged(t *testing.T) {
+	f := strongScanFixture(t)
+	c := &measuredScanCloud{Clouds: f.c}
+	f.e.clouds = c
+	initial, err := f.e.enqueue(f.r.ID, "", "", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := finishWithin(t, f, initial, time.Minute); j.Status != "completed" || j.CreatedFiles != 2 {
+		t.Fatal(j)
+	}
+	c.lists.Store(0)
+	j, err := f.e.enqueueJob(f.r.ID, "", "", false, 0, "manual", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j = finishWithin(t, f, j, time.Minute)
+	if j.Status != "completed" || j.CreatedFiles != 0 || j.IncrementalSkipped != 2 {
+		t.Fatal("incremental rescan did not take the fast path", j)
+	}
+	if c.lists.Load() != 1 {
+		t.Fatal("incremental rescan listed directories", c.lists.Load(), "times, want 1")
+	}
+}
+
 func TestIncrementalPerformanceEvidence(t *testing.T) {
 	if os.Getenv("YOLINK_INCREMENTAL_MEASURE") != "1" {
 		t.Skip("opt-in repeatable synthetic comparison")

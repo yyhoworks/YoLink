@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -50,9 +51,28 @@ func (c *playbackCache) stats() object {
 	}
 	return object{"entries": n, "hits": c.hits, "misses": c.misses}
 }
+
+// sharedAddressSpace is the CGNAT range 100.64.0.0/10 (used by Tailscale
+// and carrier NAT), which netip's IsPrivate does not cover.
+var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+
+// isNonPublicIP reports whether an address must never be dialed on behalf
+// of an untrusted URL: loopback, RFC1918 private, CGNAT shared space,
+// link-local, multicast and the unspecified address.
+func isNonPublicIP(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsLoopback() || addr.IsPrivate() || sharedAddressSpace.Contains(addr) ||
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
+		addr.IsUnspecified() || addr.IsMulticast()
+}
+
 func targetExpiry(t PlaybackTarget) time.Time {
 	now := time.Now()
-	expiry := now.Add(45 * time.Second)
+	// When no expiry can be read from the URL, assume the link may be short
+	// lived: providers use many proprietary signature parameters, and a
+	// stale cached link only surfaces as a failed playback start. 20s is
+	// the conservative default; a recognized expiry still wins if sooner.
+	expiry := now.Add(20 * time.Second)
 	u, e := url.Parse(t.URL)
 	if e != nil {
 		return now
@@ -257,8 +277,8 @@ func safeMediaClient() *http.Client {
 			return nil, errors.New("下载主机没有可用地址")
 		}
 		for _, v := range ips {
-			ip := v.IP
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+			addr, ok := netip.AddrFromSlice(v.IP)
+			if !ok || isNonPublicIP(addr) {
 				return nil, errors.New("下载地址指向内网，已拒绝请求")
 			}
 		}

@@ -224,15 +224,24 @@ func TestRestoreCorruptProtectionBlocksEveryCandidateDeletion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for name, action := range map[string]func() error{
-				"cleanup":       f.m.cleanupUnarmed,
-				"direct":        func() error { return f.m.cleanupCandidate(orphan) },
-				"cancel-orphan": func() error { return f.m.cancelRestore(context.Background(), orphan) },
-				"cancel-active": func() error { return f.m.cancelRestore(context.Background(), f.id) },
-				"discard":       func() error { return f.m.discardUploaded(orphan) },
+			// Ordered slice, not a map: Go map iteration order is random,
+			// and if one action ever succeeded it would change the state
+			// the remaining actions are asserted against.
+			for _, action := range []struct {
+				name string
+				run  func() error
+			}{
+				{"cleanup", f.m.cleanupUnarmed},
+				{"direct", func() error { return f.m.cleanupCandidate(orphan) }},
+				{"cancel-orphan", func() error { return f.m.cancelRestore(context.Background(), orphan) }},
+				{"cancel-active", func() error { return f.m.cancelRestore(context.Background(), f.id) }},
+				{"discard", func() error { return f.m.discardUploaded(orphan) }},
 			} {
-				if err = action(); err == nil {
-					t.Fatal("corruption allowed deletion path", name)
+				if raw, err := f.m.root.ReadFile(path.Join(base, "private")); err != nil || string(raw) != "do not delete" {
+					t.Fatal("protected state changed before action", action.name, err)
+				}
+				if err = action.run(); err == nil {
+					t.Fatal("corruption allowed deletion path", action.name)
 				}
 			}
 			if raw, err := f.m.root.ReadFile(path.Join(base, "private")); err != nil || string(raw) != "do not delete" {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"embed"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -74,6 +76,63 @@ func newServer(s *Store, e *Engine, p Clouds, data, output string) (*Server, err
 	}
 	token := fmt.Sprintf("%x", event)
 	return &Server{s: s, engine: e, clouds: p, adminHash: sha256.Sum256([]byte(password)), adminCredential: credential, eventToken: token, output: output, sessions: map[string]time.Time{}, attempts: map[string][]time.Time{}, links: newPlaybackCache()}, nil
+}
+
+func (s *Server) currentEventToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.eventToken
+}
+
+// rotateEventToken replaces the legacy event token: the new token is written
+// to events.key atomically (temp file + fsync + rename + directory sync) and
+// only then swapped in, so the old token stops working the moment a rotation
+// succeeds. The on-disk format stays the raw 32 bytes that newServer loads
+// through keyFile.
+func (s *Server) rotateEventToken() error {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	dir := s.s.dir
+	f, err := os.OpenFile(filepath.Join(dir, ".events-"+randomID()+".tmp"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	closed := f.Close()
+	if err != nil {
+		return err
+	}
+	if closed != nil {
+		return closed
+	}
+	if err = os.Rename(f.Name(), filepath.Join(dir, "events.key")); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	s.mu.Lock()
+	s.eventToken = fmt.Sprintf("%x", raw)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Server) eventTokenView(w http.ResponseWriter, r *http.Request) {
+	jsonOut(w, 200, object{"event_token": s.currentEventToken()})
+}
+
+func (s *Server) rotateEventTokenHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.rotateEventToken(); err != nil {
+		fail(w, 500, "事件令牌轮换失败，请检查数据目录权限后重试")
+		return
+	}
+	jsonOut(w, 200, object{"ok": true, "event_token": s.currentEventToken()})
 }
 func jsonOut(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -210,6 +269,8 @@ func (s *Server) handler() http.Handler {
 		jsonOut(w, 200, object{"ok": true})
 	}))
 	mux.HandleFunc("POST /api/settings", s.guard(s.settings))
+	mux.HandleFunc("GET /api/settings/event-token", s.guard(s.eventTokenView))
+	mux.HandleFunc("POST /api/settings/event-token/rotate", s.guard(s.rotateEventTokenHandler))
 	mux.HandleFunc("POST /api/maintenance/links", s.guard(s.previewLinks))
 	mux.HandleFunc("GET /api/changes", s.guard(s.changeHistory))
 	mux.HandleFunc("POST /api/changes/preview", s.guard(s.previewChangeRepairHTTP))
@@ -273,6 +334,15 @@ func (s *Server) handler() http.Handler {
 		r = activityRequest(r)
 		if info, ok := r.Context().Value(requestInfoKey{}).(requestInfo); ok {
 			w.Header().Set("X-YoLink-Request", info.ID)
+		}
+		// Management API requests get a bounded context so a stuck handler
+		// cannot hold a connection forever. Playback/proxy streaming (/s/)
+		// never passes through a deadline, and the backup export/import
+		// endpoints manage their own longer timeouts, so they are exempt.
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/restore/import" && r.URL.Path != "/api/backups/export" {
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+			defer cancel()
+			r = r.WithContext(ctx)
 		}
 		mux.ServeHTTP(w, r)
 	})
@@ -365,7 +435,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "入库记录读取失败")
 		return
 	}
-	jsonOut(w, 200, object{"restore_restricted": s.s.restoreRestricted, "rule_latest": s.s.latestRules(), "version": appVersion, "accounts": accounts, "account_reports": reports, "playback": s.playbackState(), "ingest": ingest, "rules": rules, "jobs": jobs, "media": media, "overview": overview, "failures": failures, "settings": object{"public_base": s.s.setting("public_base", ""), "output_root": s.engine.outputMounts[0].Path, "output_mounts": s.engine.outputMounts}, "event_token": s.eventToken})
+	jsonOut(w, 200, object{"restore_restricted": s.s.restoreRestricted, "rule_latest": s.s.latestRules(), "version": appVersion, "accounts": accounts, "account_reports": reports, "playback": s.playbackState(), "ingest": ingest, "rules": rules, "jobs": jobs, "media": media, "overview": overview, "failures": failures, "settings": object{"public_base": s.s.setting("public_base", ""), "output_root": s.engine.outputMounts[0].Path, "output_mounts": s.engine.outputMounts}})
 }
 func (s *Server) saveAccount(w http.ResponseWriter, r *http.Request) {
 	var a Account
@@ -648,7 +718,8 @@ func (s *Server) diagnose(w http.ResponseWriter, r *http.Request) {
 	}
 	target, hit, e := s.resolveMedia(r.Context(), m, false)
 	if e != nil {
-		fail(w, 502, e.Error())
+		log.Printf("resolve diagnose failed for media %s: %v", m.ID, e)
+		fail(w, 502, "播放地址获取失败，请稍后重试")
 		return
 	}
 	u, _ := url.Parse(target.URL)
@@ -692,7 +763,7 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	record.Info.Host = targetHost(target)
 	if e != nil {
 		record.Error = e.Error()
-		fail(w, 502, e.Error())
+		fail(w, 502, "播放地址获取失败，请稍后重试或运行取流自检")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -760,7 +831,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, target PlaybackTa
 		fail(w, 502, "下载地址无效")
 		return 502, 0, errors.New("下载地址无效")
 	}
-	req.Header = target.Headers.Clone()
+	headers := target.Headers
+	if headers == nil {
+		headers = http.Header{}
+	}
+	req.Header = headers.Clone()
 	for _, h := range []string{"Range", "If-Range", "If-None-Match", "If-Modified-Since"} {
 		if v := r.Header.Get(h); v != "" {
 			req.Header.Set(h, v)

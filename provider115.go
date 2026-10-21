@@ -75,7 +75,7 @@ func (p *Providers) request115(ctx context.Context, a *Account, method, endpoint
 	if method == "POST" {
 		ua = download115UA(ctx)
 	}
-	r, err := p.requestCookies(ctx, method, endpoint, body, headers(map[string]string{"Cookie": a.Secrets["cookie"], "Referer": "https://115.com/", "User-Agent": ua}), receive)
+	r, err := p.requestRead(ctx, method, endpoint, body, headers(map[string]string{"Cookie": a.Secrets["cookie"], "Referer": "https://115.com/", "User-Agent": ua}), receive)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func (p *Providers) resolve115(ctx context.Context, a *Account, m Media) (Playba
 		return PlaybackTarget{}, errors.New("115 下载请求初始化失败")
 	}
 	body, _ := json.Marshal(map[string]string{"pickcode": pickcode})
-	encoded, err := encode115(body, key)
+	encoded, err := p.encode115(body, key)
 	if err != nil {
 		return PlaybackTarget{}, err
 	}
@@ -151,7 +151,7 @@ func (p *Providers) resolve115(ctx context.Context, a *Account, m Media) (Playba
 	if err != nil {
 		return PlaybackTarget{}, err
 	}
-	decoded, err := decode115(str(r["data"]), key)
+	decoded, err := p.decode115(str(r["data"]), key)
 	if err != nil {
 		return PlaybackTarget{}, err
 	}

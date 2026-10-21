@@ -3,7 +3,7 @@
 .backup-panel>.section-heading{padding:0;flex-wrap:wrap}
 .backup-panel .section-heading h2{margin:0;font-size:20px}
 .backup-panel p{max-width:75ch;line-height:1.8;margin-block:12px}
-.backup-panel details{padding-block:18px;border-top:1px solid var(--line)}
+.backup-panel details{padding-block:18px;border-top:1px solid var(--line,var(--border))}
 .backup-panel summary{cursor:pointer;font-weight:600;min-height:44px;align-content:center}
 .backup-panel form{max-width:660px;margin-block:16px}
 .backup-panel label{display:grid;gap:8px;margin-block:16px}
@@ -13,6 +13,6 @@
 .backup-panel button{min-height:44px}
 .backup-panel code{overflow-wrap:anywhere;white-space:normal}
 .backup-panel [role=alert]{color:var(--danger)}
-.backup-confirm{border-top:1px solid var(--line);padding-top:20px}
+.backup-confirm{border-top:1px solid var(--line,var(--border));padding-top:20px}
 .backup-hold{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-block:16px}
 @media(max-width:600px){.backup-panel{padding:18px}.backup-panel .section-heading{align-items:flex-start}.backup-panel .section-heading h2{font-size:18px}.backup-panel .actions>button{flex:1 1 auto}.backup-panel input[type=file]{font-size:14px}}

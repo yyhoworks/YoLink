@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -213,18 +212,15 @@ func TestServeOutputPickerReview(t *testing.T) {
 	}
 	f := setup(t)
 	f.a.Name = "移动媒体盘（测试账号）"
-	f.s.saveAccount(f.a)
+	mustSucceed(t, f.s.saveAccount(f.a))
 	extra := t.TempDir()
-	os.Mkdir(filepath.Join(extra, "影视输出（测试目录）"), 0755)
+	mustSucceed(t, os.Mkdir(filepath.Join(extra, "影视输出（测试目录）"), 0755))
 	f.e.addOutputMount(extra, false)
-	os.Mkdir(filepath.Join(f.output, "电影输出（测试目录）"), 0755)
+	mustSucceed(t, os.Mkdir(filepath.Join(f.output, "电影输出（测试目录）"), 0755))
 	t.Setenv("STRMLINK_ADMIN_PASSWORD", "StrmLink-Output-QA")
 	s, err := newServer(f.s, f.e, reviewClouds{f.c}, f.data, f.output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("Output picker synthetic fixture http://127.0.0.1:18796")
-	if err := http.ListenAndServe("127.0.0.1:18796", s.handler()); err != nil {
-		t.Fatal(err)
-	}
+	runReviewFixture(t, s.handler(), "output picker synthetic fixture")
 }

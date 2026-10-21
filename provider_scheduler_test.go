@@ -12,7 +12,12 @@ import (
 
 func waitGateQueue(t *testing.T, g *accountGate, n int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// accountGate exposes no notification channel, so this waits by polling
+	// the waiter count; the deadline is deliberately generous (with a short
+	// sleep instead of a hot spin) so a loaded CI machine or -race build
+	// cannot flake it. The condition itself is exact: it returns the moment
+	// the gate holds n waiters.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		g.mu.Lock()
 		count := len(g.waiters)
@@ -21,6 +26,7 @@ func waitGateQueue(t *testing.T, g *accountGate, n int) {
 			return
 		}
 		runtime.Gosched()
+		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("account gate did not queue %d waiters", n)
 }

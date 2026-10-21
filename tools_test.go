@@ -34,18 +34,7 @@ func (c *countingCloud) Resolve(ctx context.Context, m Media) (PlaybackTarget, e
 }
 func testToolsServer(t *testing.T, f *fixture, c Clouds) (*Server, http.Handler, *http.Cookie) {
 	t.Helper()
-	t.Setenv("STRMLINK_ADMIN_PASSWORD", "fixture-admin-password")
-	s, e := newServer(f.s, f.e, c, f.data, f.output)
-	if e != nil {
-		t.Fatal(e)
-	}
-	h := s.handler()
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"password":"fixture-admin-password"}`)))
-	if w.Code != 200 {
-		t.Fatal(w.Body.String())
-	}
-	return s, h, w.Result().Cookies()[0]
+	return testServerWithStore(t, f.s, f, c)
 }
 func TestPlaybackCacheSharesConcurrentRequestsAndInvalidates(t *testing.T) {
 	f := setup(t)
@@ -79,13 +68,19 @@ func TestPlaybackCacheSharesConcurrentRequestsAndInvalidates(t *testing.T) {
 	}
 	a, _ := f.s.account(f.a.ID)
 	a.Secrets["authorization"] = "changed-test-credential"
-	f.s.saveAccount(a)
-	s.resolveMedia(context.Background(), m, false)
+	mustSucceed(t, f.s.saveAccount(a))
+	target, hit, e := s.resolveMedia(context.Background(), m, false)
+	if e != nil || hit || target.URL != f.c.target.URL {
+		t.Fatalf("credential change resolve did not return a fresh target: %+v hit=%v err=%v", target, hit, e)
+	}
 	if cloud.calls.Load() != 2 {
 		t.Fatal("credential change reused old target")
 	}
 	s.links.clear()
-	s.resolveMedia(context.Background(), m, false)
+	target, hit, e = s.resolveMedia(context.Background(), m, false)
+	if e != nil || hit || target.URL != f.c.target.URL {
+		t.Fatalf("post-clear resolve did not return a fresh target: %+v hit=%v err=%v", target, hit, e)
+	}
 	if cloud.calls.Load() != 3 {
 		t.Fatal("clear reused old target")
 	}
@@ -149,9 +144,27 @@ func TestPlaybackProbeChecksDataAndRangeWithoutReadingWholeFile(t *testing.T) {
 	}
 	client := safeMediaClient()
 	defer client.CloseIdleConnections()
-	if r, e := client.Get("http://127.0.0.1:1/media"); e == nil {
+	// The private-address guard must be proven against a live loopback
+	// listener: a dead port would fail with connection refused even if the
+	// guard in safeMediaClient were deleted, so it cannot distinguish
+	// "refused by policy" from "nothing listening".
+	var reached atomic.Bool
+	loopback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		w.Header().Set("Content-Type", "video/mp4")
+		io.WriteString(w, "media")
+	}))
+	defer loopback.Close()
+	r, e := client.Get(loopback.URL + "/media")
+	if e == nil {
 		r.Body.Close()
 		t.Fatal("probe allowed private target")
+	}
+	if reached.Load() {
+		t.Fatal("private target handler was reached despite the guard")
+	}
+	if !strings.Contains(e.Error(), "内网") {
+		t.Fatalf("request failed for a reason other than the private-address guard: %v", e)
 	}
 }
 func TestIngestWaitsForBusyRuleAndScansOnlyFileParent(t *testing.T) {
@@ -369,10 +382,5 @@ func TestServeGlassToolsReview(t *testing.T) {
 		t.Fatal(e)
 	}
 	s.probeClient = upstream.Client()
-	server := &http.Server{Addr: "127.0.0.1:18796", Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
-	t.Log("Glass tools local fixture http://127.0.0.1:18796; synthetic media and accounts only")
-	if e = server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
-		t.Fatal(e)
-	}
+	runReviewFixture(t, s.handler(), "glass tools; synthetic media and accounts only")
 }

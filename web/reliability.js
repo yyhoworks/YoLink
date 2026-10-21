@@ -128,7 +128,7 @@ async function exportMediaDiagnostic(){
   const report=await api('/api/diagnostics/'+encodeURIComponent(snapshot.id)+'/export');
   if(diagnosticContext!==ctx||ctx.report!==snapshot)return;
   const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
-  const link=document.createElement('a');link.href=url;link.download='yolink-diagnostic-'+snapshot.id+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const link=document.createElement('a');link.href=url;link.download='yolink-diagnostic-'+snapshot.id+'.json';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
  }catch(error){if(diagnosticContext===ctx&&ctx.report===snapshot)reliabilityError('diagnostic-error',error.message);}
  finally{if(diagnosticContext===ctx)button.disabled=false;}
 }

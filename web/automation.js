@@ -92,7 +92,7 @@ document.addEventListener('click',e=>{
  if(b.dataset.autoSection){const target=$(b.dataset.autoSection);if(target){window.scrollTo({top:Math.max(0,target.getBoundingClientRect().top+window.scrollY-112),behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});const heading=target.querySelector('h2');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true})}}}
  if(b.dataset.autoEdit)automationEdit(b.dataset.autoEdit);
  if(b.dataset.autoCopy)action(b,async()=>{await copy('/strm '+b.dataset.autoCopy);toast('生成命令已复制')});
- if(b.dataset.autoToggle)action(b,async()=>{const items=automationRawTargets(),t=items.find(x=>x.alias===b.dataset.autoToggle);t.enabled=!t.enabled;await automationSave(items);toast(t.enabled?'目录命令已启用':'目录命令已停用')});
+ if(b.dataset.autoToggle)action(b,async()=>{const items=automationRawTargets(),t=items.find(x=>x.alias===b.dataset.autoToggle);if(!t)return;t.enabled=!t.enabled;await automationSave(items);toast(t.enabled?'目录命令已启用':'目录命令已停用')});
  if(b.dataset.autoEvent)action(b,async()=>{await api('/api/ingest/'+b.dataset.autoEvent+'/retry',{});await loadAutomation();toast('已重新排队读取该目录')});
  if(b.dataset.autoJob)action(b,async()=>{await api('/api/jobs/'+b.dataset.autoJob+'/retry',{});await refresh();await loadAutomation();toast('已重试本次生成范围')});
  if(b.dataset.autoDelivery)action(b,async()=>{await api('/api/deliveries/'+b.dataset.autoDelivery+'/retry',{});await loadAutomation();toast('通知已加入重试队列')});

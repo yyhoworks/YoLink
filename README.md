@@ -2,7 +2,7 @@
 
 面向 NAS 的网盘 STRM 生成与播放入口服务。直接接入移动云盘、夸克、阿里云盘和 115；Go + SQLite + 内嵌网页，单容器运行，默认端口 **8796**。
 
-当前源码版本：**0.14.0**。本仓库作为邀请内测的私有源码仓库，仅受邀 GitHub 账号可以访问。软件许可证仍为 AGPL-3.0，详见下方许可说明。
+当前源码版本：**0.14.1**。本仓库作为邀请内测的私有源码仓库，仅受邀 GitHub 账号可以访问。软件许可证仍为 AGPL-3.0，详见下方许可说明。
 
 ## 主要功能
 
@@ -24,8 +24,15 @@
 ```sh
 git clone https://github.com/yyhoworks/YoLink.git
 cd YoLink
-docker compose up -d --build
+cp .env.example .env
+mkdir -p ./data ./strm-test
+sudo chown -R 10001:10001 ./data ./strm-test
+docker compose build
+docker compose run --rm --no-deps yolink check-permissions
+docker compose up -d
 ```
+
+以上使用专属的默认目录和 UID/GID；root 终端省略 `sudo`。如修改 `.env` 中的输出目录或 `YOLINK_UID`/`YOLINK_GID`，请同步调整实际目录权限后再启动。NAS 共享目录可通过 ACL 授权；不要直接对共享媒体库递归改属主。旧版本升级先按[升级与备份](QUICKSTART.md#升级与备份)处理已有文件权限。
 
 此仓库默认使用 `Dockerfile` 从源码构建，不要求将预编译程序提交到 Git。首次构建需要访问 Go 模块与容器基础镜像源。私有镜像分发尚未在本仓库配置。
 
@@ -49,6 +56,7 @@ docker compose up -d --build
 - [加密备份与恢复操作](docs/backup-restore.md)
 - [0.13.0 更新说明](docs/release-0.13.0.md)
 - [0.14.0 更新说明](docs/release-0.14.0.md)
+- [0.14.1 更新说明](docs/release-0.14.1.md)
 - [增量观测、变更核对与场景模板](docs/incremental-sync.md)
 - [0.12.0 更新说明](docs/release-0.12.0.md)
 - [0.11.11 更新说明](docs/release-0.11.11.md)

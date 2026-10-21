@@ -37,6 +37,35 @@ func (s *Server) backupReauthenticate(w http.ResponseWriter, r *http.Request, pa
 	return true
 }
 
+// backupWorkTimeout scales the single-request budget for backup export and
+// import with the payload size. The fixed ten minutes comfortably covers
+// small backups; every additional 128 MiB of payload adds a minute, capped
+// at one hour, so a backup near the 4 GiB payload limit can still finish on
+// slow NAS storage instead of timing out at the same point on every retry.
+func backupWorkTimeout(payloadBytes int64) time.Duration {
+	const base, ceiling = 10 * time.Minute, 60 * time.Minute
+	if payloadBytes <= 0 {
+		return base
+	}
+	timeout := base + time.Duration(payloadBytes/(128<<20))*time.Minute
+	if timeout > ceiling {
+		return ceiling
+	}
+	return timeout
+}
+
+// backupExportPayloadEstimate approximates the export payload from the live
+// database: the snapshot is a VACUUM copy of it, plus small key files.
+func (s *Server) backupExportPayloadEstimate() int64 {
+	var total int64
+	for _, name := range []string{"strmlink.db", "strmlink.db-wal", "strmlink.db-shm"} {
+		if info, err := os.Stat(filepath.Join(s.s.dir, name)); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
+}
+
 func (s *Server) startBackupOperation(w http.ResponseWriter) bool {
 	if !s.backupMu.TryLock() {
 		fail(w, 409, "已有备份或恢复操作正在处理，请稍后重试")
@@ -59,7 +88,7 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.backupMu.Unlock()
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), backupWorkTimeout(s.backupExportPayloadEstimate()))
 	defer cancel()
 	m, err := openRestoreManager(s.s.dir)
 	if err != nil {
@@ -158,8 +187,11 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 	defer s.backupMu.Unlock()
 	r.Body = http.MaxBytesReader(w, r.Body, backupMaxTotalBytes+backupMaxManifest+int64(backupMaxFiles)*4096+1<<20)
 	defer r.Body.Close()
+	// The declared request size is the ciphertext plus multipart overhead,
+	// a close upper bound for the validation work below.
+	timeout := backupWorkTimeout(r.ContentLength)
 	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(10 * time.Minute))
+	_ = controller.SetReadDeadline(time.Now().Add(timeout))
 	defer controller.SetReadDeadline(time.Time{})
 	multipart, err := r.MultipartReader()
 	if err != nil {
@@ -198,7 +230,7 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	candidate, err := m.prepareCandidate(ctx, file, in.BackupPassword)
 	if err != nil {
@@ -228,10 +260,11 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) restoreStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.startBackupOperation(w) {
-		return
-	}
-	defer s.backupMu.Unlock()
+	// Read-only: journal and candidate state is published through
+	// checksummed envelopes and atomic renames, so a concurrent backup or
+	// restore operation can only expose the before/after state, never a
+	// torn one. Do not take backupMu here — a long export or import would
+	// otherwise blind the status endpoint (409) for its whole duration.
 	m, err := openRestoreManager(s.s.dir)
 	if err != nil {
 		fail(w, 500, "恢复状态无法读取")

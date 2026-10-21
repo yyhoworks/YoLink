@@ -20,7 +20,7 @@ func TestBackupHTTPImportConfirmCancelRestartReviewAndRollback(t *testing.T) {
 	if _, err := writeBackupArchive(context.Background(), &encrypted, snapshot, backupTestPassword, currentSchemaVersion); err != nil {
 		t.Fatal(err)
 	}
-	s, h, cookie := testToolsServer(t, f, f.c)
+	_, h, cookie := testToolsServer(t, f, f.c)
 	in := backupRequest{AdminPassword: "fixture-admin-password", BackupPassword: backupTestPassword}
 	result := backupMultipartRequest(t, h, cookie, in, encrypted.Bytes())
 	if result.Code != 200 {
@@ -48,11 +48,13 @@ func TestBackupHTTPImportConfirmCancelRestartReviewAndRollback(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(f.data, restoreControlName, upload.ID)); !os.IsNotExist(err) {
 		t.Fatal("cancelled candidate session retained", err)
 	}
-	// Clear auth attempt window after its independent checks, then run activation.
-	s.mu.Lock()
-	clear(s.attempts)
-	s.mu.Unlock()
-	result = backupMultipartRequest(t, h, cookie, in, encrypted.Bytes())
+	// The checks above deliberately consumed most of this Server's auth
+	// attempt window. Run activation through a fresh Server instance over
+	// the same store (a new client session), which starts with an empty
+	// window — instead of reaching into the first Server and clearing its
+	// rate-limit table by hand.
+	_, h2, cookie2 := testToolsServer(t, f, f.c)
+	result = backupMultipartRequest(t, h2, cookie2, in, encrypted.Bytes())
 	if result.Code != 200 {
 		t.Fatal(result.Code, result.Body.String())
 	}
@@ -60,7 +62,7 @@ func TestBackupHTTPImportConfirmCancelRestartReviewAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirm.ID, confirm.Revision = upload.ID, upload.Revision
-	if w := generationPOST(h, cookie, "/api/restore/confirm", confirm); w.Code != 200 {
+	if w := generationPOST(h2, cookie2, "/api/restore/confirm", confirm); w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	// Simulate main's controlled shutdown then pre-Store startup recovery.

@@ -7,16 +7,16 @@
 .reliability-panel .actions{flex-wrap:wrap;margin-block:16px}
 .reliability-panel button{min-height:44px}
 .reliability-list{list-style:none;padding:0;margin:16px 0}
-.reliability-list>li{padding:16px 0;border-bottom:1px solid var(--line)}
+.reliability-list>li{padding:16px 0;border-bottom:1px solid var(--line,var(--border))}
 .reliability-list>li>div{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
 .reliability-state{font-weight:500;flex-shrink:0}
 .reliability-list p{margin:6px 0}
 .reliability-list small{display:block;color:var(--muted);font-size:12px;line-height:1.8;font-variant-numeric:tabular-nums}
 .reliability-check,.reliability-job{display:flex;align-items:flex-start;gap:12px;line-height:1.8;cursor:pointer}
-.reliability-panel input[type=checkbox]{width:20px;height:20px;flex:0 0 20px;margin-top:3px;accent-color:var(--palette-strong)}
+.reliability-panel input[type=checkbox]{width:20px;height:20px;flex:0 0 20px;margin-top:3px;accent-color:var(--palette-strong,#30332b)}
 .reliability-job>span{min-width:0}.reliability-path{display:block;margin-top:4px}
 .reliability-toolbar{margin-top:20px;flex-wrap:wrap}
-.reliability-confirm{border-top:1px solid var(--line);margin-top:24px;padding-top:4px}
+.reliability-confirm{border-top:1px solid var(--line,var(--border));margin-top:24px;padding-top:4px}
 .reliability-confirm li{margin-block:8px;line-height:1.8}
 .reliability-panel [role=alert]{color:var(--danger)}
 @media(max-width:600px){.reliability-panel{padding:18px}.reliability-heading{align-items:flex-start}.reliability-heading h2{font-size:18px}.reliability-toolbar>button{width:100%}.reliability-panel .actions>button{flex:1 1 auto}}

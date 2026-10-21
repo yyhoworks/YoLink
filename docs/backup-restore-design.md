@@ -1,10 +1,8 @@
 # Encrypted backup/restore — implementation and verification contract
 
-Status 2026-10-21: manual encrypted export/import, isolated validation, restart
-activation, retained rollback, startup lock/hold and settings UI are implemented
-on codex/reliability-suite. Published 0.12.0 does not include this work. Independent
-gpt-6-astra/high design/implementation reviews and focused tests exist; final
-persistent recovery, ENOSPC, frozen-candidate and deployment gates remain. See
+Status 2026-10-21: 已随 0.13.0 发布，加密备份/恢复为正式功能。本文件保留为
+设计与验证契约记录；下文中提及实现分支（如 codex/reliability-suite）与未完成
+门禁的表述均为实现期历史记录，不代表当前发布状态。See
 backup-temp-ownership.md and restore-activation-design.md for the current
 filesystem protocol, and backup-restore.md for operator instructions.
 

@@ -10,13 +10,14 @@ func TestIngestBatchSelectsIdleRulesFairly(t *testing.T) {
 	for _, status := range []string{"running", "queued", "completed"} {
 		t.Run(status, func(t *testing.T) {
 			f := setup(t)
-			// Keep the real queue/store, but step ingestion without background races.
+			// Keep the real queue/store, but step ingestion deterministically:
+			// stop the fixture engine's background workers, stage all state,
+			// then drive processIngest manually on a dedicated engine built
+			// for this test (instead of reviving the stopped engine by
+			// swapping its context, which would silently decouple the test
+			// from the production engine assembly).
 			f.cancel()
 			f.e.wg.Wait()
-			f.e.ctx = context.Background()
-			if err := f.s.saveJob(Job{ID: "first-rule-job", Rule: f.r.ID, Status: status}); err != nil {
-				t.Fatal(err)
-			}
 			second := f.r
 			second.ID = "second-rule"
 			if err := f.s.saveRule(second); err != nil {
@@ -33,7 +34,17 @@ func TestIngestBatchSelectsIdleRulesFairly(t *testing.T) {
 			if _, err := f.s.db.Exec("INSERT INTO ingest_events VALUES('second-event',?,?,'pending','','',100,1)", second.ID, second.SourcePath); err != nil {
 				t.Fatal(err)
 			}
-			f.e.processIngest()
+			step, err := newEngine(context.Background(), f.s, f.c, f.output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer step.Close()
+			// Insert the blocking job only after the stepping engine exists,
+			// so its startup queueing cannot pick the job up and run it.
+			if err := f.s.saveJob(Job{ID: "first-rule-job", Rule: f.r.ID, Status: status}); err != nil {
+				t.Fatal(err)
+			}
+			step.processIngest()
 			var job, eventStatus string
 			if err := f.s.db.QueryRow("SELECT job,status FROM ingest_events WHERE id='second-event'").Scan(&job, &eventStatus); err != nil {
 				t.Fatal(err)
@@ -57,7 +68,7 @@ func TestIngestBatchSelectsIdleRulesFairly(t *testing.T) {
 				if err := f.s.saveJob(Job{ID: "first-rule-job", Rule: f.r.ID, Status: "completed"}); err != nil {
 					t.Fatal(err)
 				}
-				f.e.processIngest()
+				step.processIngest()
 				var firstStatus string
 				if err := f.s.db.QueryRow("SELECT status FROM ingest_events WHERE id='event-000'").Scan(&firstStatus); err != nil {
 					t.Fatal(err)

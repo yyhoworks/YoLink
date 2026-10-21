@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"path"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,12 +60,36 @@ func (f FileFilter) excluded(name, relative string) bool {
 		}
 	}
 	if f.Pattern != "" {
-		re, err := regexp.Compile(f.Pattern)
+		re, err := compiledFilterPattern(f.Pattern)
 		if err == nil && re.MatchString(relative) {
 			return true
 		}
 	}
 	return false
+}
+
+type filterPatternResult struct {
+	re  *regexp.Regexp
+	err error
+}
+
+// filterPatterns caches compiled exclusion regexes by pattern so scanning
+// does not recompile the same pattern for every file. A compile failure is
+// logged once when the pattern is first compiled (validate() already rejects
+// bad patterns at save time; this only guards stale stored data).
+var filterPatterns sync.Map // map[string]filterPatternResult
+
+func compiledFilterPattern(pattern string) (*regexp.Regexp, error) {
+	if v, ok := filterPatterns.Load(pattern); ok {
+		r := v.(filterPatternResult)
+		return r.re, r.err
+	}
+	re, err := regexp.Compile(pattern)
+	filterPatterns.Store(pattern, filterPatternResult{re, err})
+	if err != nil {
+		log.Printf("文件过滤排除正则编译失败，该规则暂不生效: %v", err)
+	}
+	return re, err
 }
 func (f FileFilter) media(e Entry) bool {
 	ext := strings.ToLower(path.Ext(e.Name))

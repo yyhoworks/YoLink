@@ -179,9 +179,9 @@ func TestServeCloudManagementReview(t *testing.T) {
 	}
 	f := setup(t)
 	f.a.Name = "移动媒体盘（测试账号）"
-	f.s.saveAccount(f.a)
+	mustSucceed(t, f.s.saveAccount(f.a))
 	for _, a := range []Account{{ID: "review-ali", Name: "阿里资源库（测试账号）", Provider: "ali", Root: "root", Drive: "d", Secrets: map[string]string{"access_token": "fixture-only"}}, {ID: "review-quark", Name: "夸克影音（测试账号）", Provider: "quarktv", Root: "root", Secrets: map[string]string{"access_token": "fixture-only", "device_id": "fixture"}}} {
-		f.s.saveAccount(a)
+		mustSucceed(t, f.s.saveAccount(a))
 	}
 	f.c.dirs["root"] = []Entry{{ID: "movies", Name: "电影", Dir: true, Modified: "2026-10-18T11:00:00Z"}, {ID: "series", Name: "剧集", Dir: true, Modified: "2026-10-17T12:00:00Z"}, {ID: "music", Name: "音乐", Dir: true, Modified: "2026-10-16T12:00:00Z"}, {ID: "sample", Name: "测试电影.mkv", Size: 12 * 1024 * 1024 * 1024, Modified: "2026-10-18T10:00:00Z"}, {ID: "audio", Name: "测试音轨.flac", Size: 500 * 1024 * 1024, Modified: "2026-10-18T10:00:00Z"}, {ID: "subtitle", Name: "中文字幕.srt", Size: 23000, Modified: "2026-10-17T10:00:00Z"}}
 	f.c.dirs["movies"] = []Entry{{ID: "family", Name: "华语电影", Dir: true}, {ID: "sample2", Name: "测试电影 02.mkv", Size: 8 * 1024 * 1024 * 1024, Modified: "2026-10-18T10:00:00Z"}}
@@ -197,10 +197,5 @@ func TestServeCloudManagementReview(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	server := &http.Server{Addr: "127.0.0.1:18796", Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
-	t.Log("Local fixture http://127.0.0.1:18796; no real clouds")
-	if e = server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
-		t.Fatal(e)
-	}
+	runReviewFixture(t, s.handler(), "cloud management; no real clouds")
 }

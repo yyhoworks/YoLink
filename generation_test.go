@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -171,6 +170,27 @@ func TestBulkRetryReportsDeferredScopes(t *testing.T) {
 	if len(result.Started)+len(result.Deferred) != 2 || len(result.Started) == 0 {
 		t.Fatalf("bulk retry lost scopes: %s", w.Body.String())
 	}
+	// Both failed jobs share one rule+folder scope, and only one retried
+	// scope per rule may be active: exactly one must have started as a retry
+	// of one original, and the other must be reported deferred by ID with a
+	// reason — never silently dropped or double-started.
+	if len(result.Started) != 1 || len(result.Deferred) != 1 {
+		t.Fatalf("bulk retry split = %d started / %d deferred, want 1/1: %s", len(result.Started), len(result.Deferred), w.Body.String())
+	}
+	started := result.Started[0]
+	if started.RetryOf != "failed-a" && started.RetryOf != "failed-b" {
+		t.Fatalf("started job is not a retry of an original failure: %+v", started)
+	}
+	wantDeferred := "failed-a"
+	if started.RetryOf == "failed-a" {
+		wantDeferred = "failed-b"
+	}
+	if got := result.Deferred[0]["id"]; got != wantDeferred {
+		t.Fatalf("deferred scope = %v, want %s", got, wantDeferred)
+	}
+	if reason, _ := result.Deferred[0]["reason"].(string); reason == "" {
+		t.Fatalf("deferred scope carries no reason: %v", result.Deferred[0])
+	}
 	for _, j := range result.Started {
 		finish(t, f, j)
 	}
@@ -195,10 +215,5 @@ func TestServeGenerationReview(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	httpServer := &http.Server{Addr: "127.0.0.1:18796", Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
-	t.Cleanup(func() { httpServer.Shutdown(context.Background()) })
-	t.Log("Local-only generation review at http://127.0.0.1:18796; fixture data only")
-	if e = httpServer.ListenAndServe(); e != nil && e != http.ErrServerClosed {
-		t.Fatal(e)
-	}
+	runReviewFixture(t, s.handler(), "generation review; fixture data only")
 }

@@ -214,7 +214,7 @@ func openStoreForStartup(dir string, recovery restoreRuntime) (result *Store, er
 	}
 	s.restoreRestricted = restoreReview == "1" || recovery.held()
 	if !s.restoreRestricted {
-		jobs, e := s.jobs(10000)
+		jobs, e := s.jobsForRecovery()
 		if e != nil {
 			return nil, e
 		}
@@ -394,25 +394,62 @@ func (s *Store) job(id string) (Job, error) {
 	e = json.Unmarshal([]byte(p), &j)
 	return j, e
 }
-func (s *Store) jobs(limit int) ([]Job, error) {
-	rows, e := s.db.Query("SELECT payload FROM jobs ORDER BY created DESC,rowid DESC LIMIT ?", limit)
-	if e != nil {
-		return nil, e
-	}
+func scanJobs(rows *sql.Rows) ([]Job, error) {
 	defer rows.Close()
 	out := []Job{}
 	for rows.Next() {
 		var p string
 		var j Job
-		if e = rows.Scan(&p); e != nil {
-			return nil, e
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
 		}
-		if e = json.Unmarshal([]byte(p), &j); e != nil {
-			return nil, e
+		if err := json.Unmarshal([]byte(p), &j); err != nil {
+			return nil, err
 		}
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) jobs(limit int) ([]Job, error) {
+	rows, e := s.db.Query("SELECT payload FROM jobs ORDER BY created DESC,rowid DESC LIMIT ?", limit)
+	if e != nil {
+		return nil, e
+	}
+	return scanJobs(rows)
+}
+
+// jobsForRecovery returns every job startup recovery must visit — running or
+// queued jobs, plus interrupted ones that can resume — selected by status
+// rather than by a count cut-off, so older jobs are never silently skipped
+// once the table grows past an arbitrary window.
+func (s *Store) jobsForRecovery() ([]Job, error) {
+	rows, e := s.db.Query("SELECT payload FROM jobs WHERE status IN ('running','queued') OR (status='interrupted' AND json_extract(payload,'$.resumable')=1) ORDER BY created DESC,rowid DESC")
+	if e != nil {
+		return nil, e
+	}
+	return scanJobs(rows)
+}
+
+// recentJobsForRules returns the newest jobs belonging to the given rules,
+// filtered in the query so a busy rule cannot crowd other rules' jobs out of
+// a global newest-first window.
+func (s *Store) recentJobsForRules(rules []string, limit int) ([]Job, error) {
+	if len(rules) == 0 {
+		return []Job{}, nil
+	}
+	placeholders := make([]string, len(rules))
+	args := make([]any, 0, len(rules)+1)
+	for i, id := range rules {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, limit)
+	rows, e := s.db.Query("SELECT payload FROM jobs WHERE json_extract(payload,'$.rule') IN ("+strings.Join(placeholders, ",")+") ORDER BY created DESC,rowid DESC LIMIT ?", args...)
+	if e != nil {
+		return nil, e
+	}
+	return scanJobs(rows)
 }
 func (s *Store) saveMedia(m Media) error {
 	p, e := json.Marshal(m)
