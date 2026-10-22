@@ -11,8 +11,8 @@
  if(compact.addEventListener)compact.addEventListener('change',placeNavigation);else compact.addListener(placeNavigation);
  placeNavigation();
  const settings=sidebar.querySelector('[data-nav="settings"]');
- sidebar.querySelector('nav').append(settings);
  const more=sidebar.querySelector('[data-nav="more"]');
+ more.before(settings);
  more.classList.add('desktop-more');
  const actions=document.createElement('div');actions.className='butter-header-actions';
  actions.innerHTML='<button type="button" class="skin-trigger" data-skin-toggle aria-label="皮肤管理" aria-expanded="false" aria-controls="skin-panel"><i data-lucide="palette" aria-hidden="true"></i><span>皮肤</span></button>';
