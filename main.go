@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const appVersion = "0.14.1"
+const appVersion = "0.14.2"
 
 func env(name, def string) string {
 	if v := os.Getenv(name); v != "" {

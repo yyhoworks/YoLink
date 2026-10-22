@@ -28,7 +28,7 @@
 
 YoLink 直接接入**移动云盘、夸克、阿里云盘和 115**，按目录规则生成本地 STRM 文件，供 Emby、Jellyfin、Kodi 等媒体库读取。播放时，由稳定的签名入口解析网盘临时地址，按通道返回 302 跳转，或在明确允许后通过服务器中转。媒体原文件保留在网盘。
 
-运行时只需要一个 Go 程序，网页和 SQLite 随服务提供，**无需依赖 OpenList 或 CD2**，单容器即可运行，默认端口为 **8796**。当前版本为 **0.14.1**，源码、Docker 镜像和 Release 程序包均已公开。
+运行时只需要一个 Go 程序，网页和 SQLite 随服务提供，**无需依赖 OpenList 或 CD2**，单容器即可运行，默认端口为 **8796**。当前版本为 **0.14.2**，源码、Docker 镜像和 Release 程序包均已公开。
 
 ## 界面预览
 
@@ -93,7 +93,7 @@ docker compose up -d --no-build
 
 以上使用默认的专属目录和 UID/GID `10001:10001`，root 终端可省略 `sudo`。自定义输出目录或 `YOLINK_UID`/`YOLINK_GID` 时，请先按实际设置授予目录权限。NAS 共享目录可使用 ACL；不要直接对共享媒体库递归改属主。旧版本升级请先阅读 [升级与备份](QUICKSTART.md#升级与备份)。
 
-Compose 默认拉取 `yyhoworks/yolink:0.14.1`。需要从源码构建镜像时，使用支持 BuildKit/Buildx 的 Docker，执行 `docker compose build` 后再启动；构建过程需要访问 Go 模块和基础镜像源。
+Compose 默认拉取 `yyhoworks/yolink:0.14.2`。需要从源码构建镜像时，使用支持 BuildKit/Buildx 的 Docker，执行 `docker compose build` 后再启动；构建过程需要访问 Go 模块和基础镜像源。
 
 ### 第一次使用
 
@@ -124,12 +124,13 @@ Compose 默认拉取 `yyhoworks/yolink:0.14.1`。需要从源码构建镜像时�
 | 理解观测对比、变更核对和缺失修复 | [增量观测与场景模板](docs/incremental-sync.md) |
 | 导出备份、校验与恢复 | [加密备份与恢复](docs/backup-restore.md) |
 | 开发、构建前端或运行检查 | [开发说明](docs/DEVELOPMENT.md) |
-| 查看本版变化和升级要求 | [0.14.1 更新说明](docs/release-0.14.1.md) · [全部 Release](https://github.com/yyhoworks/YoLink/releases) |
+| 查看本版变化和升级要求 | [0.14.2 更新说明](docs/release-0.14.2.md) · [全部 Release](https://github.com/yyhoworks/YoLink/releases) |
 | 查看依赖和素材来源 | [第三方说明](THIRD_PARTY.md) |
 
 <details>
 <summary>历史版本说明</summary>
 
+- [0.14.1：安全、恢复与容器权限修复](docs/release-0.14.1.md)
 - [0.14.0：增量观测、变更核对与场景模板](docs/release-0.14.0.md)
 - [0.13.0：加密备份与恢复](docs/release-0.13.0.md)
 - [0.12.0：账号健康与播放诊断](docs/release-0.12.0.md)
