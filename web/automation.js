@@ -76,7 +76,7 @@ $('automation-editor').addEventListener('submit',e=>{e.preventDefault();action(e
  items.push(t);await automationSave(items,automationDraft.revision);$('automation-editor').hidden=true;automationEditing=null;automationDraft=null;toast('目录命令已保存，Hermes 下次命令立即使用新配置');
 })});
 $('automation-editor-cancel').addEventListener('click',()=>{$('automation-editor').hidden=true;automationEditing=null;automationDraft=null;$('automation-add').focus()});
-$('automation-remove').addEventListener('click',e=>action(e.currentTarget,async()=>{await automationSave(automationDraft.items.filter(t=>t.alias!==automationEditing),automationDraft.revision);$('automation-editor').hidden=true;automationEditing=null;automationDraft=null;toast('目录命令已移除，媒体文件保留')}));
+$('automation-remove').addEventListener('click',e=>action(e.currentTarget,async()=>{if(!confirm('移除目录命令“'+automationEditing+'”？媒体文件保留，命令本身不可恢复。'))return;await automationSave(automationDraft.items.filter(t=>t.alias!==automationEditing),automationDraft.revision);$('automation-editor').hidden=true;automationEditing=null;automationDraft=null;toast('目录命令已移除，媒体文件保留')}));
 $('automation-add').addEventListener('click',()=>automationEdit());
 $('automation-rule').addEventListener('change',()=>{$('automation-path').value=ruleBy($('automation-rule').value)?.source_path||'';automationOutputHint()});$('automation-path').addEventListener('input',automationOutputHint);
 $('automation-search').addEventListener('input',renderAutomationTargets);
