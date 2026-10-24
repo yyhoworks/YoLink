@@ -86,7 +86,7 @@ document.addEventListener('click',event=>{
  if(b.dataset.edit)openAccountForm(b.dataset.edit);
  if(b.dataset.cloudBrowse)action(b,()=>openCloudFiles(b.dataset.cloudBrowse));
  if(b.dataset.cloudRule){generationEditRule(null,b.dataset.cloudRule);void generationPickFolder('rule').catch(e=>toast(e.message))}
- if(b.dataset.cloudCheck)action(b,async()=>{const r=await api('/api/accounts/'+b.dataset.cloudCheck+'/check',{});await refresh();toast(r.reachable?'连接正常，根目录读取成功':'连接失败：'+r.error)});
+ if(b.dataset.cloudCheck)action(b,async()=>{const r=await api('/api/accounts/'+b.dataset.cloudCheck+'/check',{},{timeoutMs:180000});await refresh();toast(r.reachable?'连接正常，根目录读取成功':'连接失败：'+r.error)});
  if(b.dataset.cloudQuota)action(b,async()=>{const r=await api('/api/accounts/'+b.dataset.cloudQuota+'/quota',{});await refresh();toast(r.quota_error||'容量已更新')});
  if(b.dataset.cloudRemove)action(b,async()=>{const a=accountBy(b.dataset.cloudRemove);if(!confirm('移除“'+a.name+'”的本地账号配置？云端文件和已生成文件会保留。'))return;await api('/api/accounts/'+a.id+'/remove',{});await refresh();toast('账号配置已移除')});
  if(b.dataset.filesTrail!==undefined){fileTrail=fileTrail.slice(0,Number(b.dataset.filesTrail)+1);$('files-search').value='';void loadCloudFiles()}

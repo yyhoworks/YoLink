@@ -153,7 +153,10 @@ genEl('gen-folder-use').addEventListener('click',event=>action(event.currentTarg
 genEl('gen-rule-form').addEventListener('submit',generationSave);
 genEl('gen-all').addEventListener('click',event=>action(event.currentTarget,async()=>{
  if(!state.rules.length)throw new Error('请先添加目录规则');let count=0;const errors=[];
- for(const rule of state.rules.filter(r=>!accountBy(r.account)?.disabled)){try{await api('/api/jobs',{rule:rule.id,dry_run:false,limit:0});count++}catch(e){errors.push(rule.name+'：'+e.message)}}
+ const targets=state.rules.filter(r=>!accountBy(r.account)?.disabled);
+ const button=event.currentTarget,original=button.innerHTML;
+ try{for(const rule of targets){button.textContent=`正在提交 ${count+1} / ${targets.length} 条…`;try{await api('/api/jobs',{rule:rule.id,dry_run:false,limit:0});count++}catch(e){errors.push(rule.name+'：'+e.message)}}}
+ finally{button.innerHTML=original}
  await refresh();nav('tasks');toast(`已提交 ${count} 个目录的全量生成${errors.length?'；'+errors.join('；'):''}`);
 }));
 genEl('gen-refresh').addEventListener('click',event=>action(event.currentTarget,refresh));
