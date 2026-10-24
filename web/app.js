@@ -10,7 +10,7 @@ function createAPI(dependencies) {
   return async function request(path, body, options = {}) {
     var _a, _b, _c;
     const controller = new AbortController();
-    const timeoutMs = options.timeoutMs ?? (body === void 0 ? dependencies.readTimeoutMs ?? 6e4 : 0);
+    const timeoutMs = options.timeoutMs ?? (body === void 0 ? dependencies.readTimeoutMs ?? 6e4 : 12e4);
     let timedOut = false;
     let timer;
     const abort = () => controller.abort();

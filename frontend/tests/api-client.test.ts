@@ -131,19 +131,29 @@ describe('API cancellation, deadlines and resource cleanup', () => {
     await result;
   });
 
-  it.each([['GET with explicit opt-out', undefined, 0], ['POST without a deadline', {}, undefined]] as const)(
-    'does not impose a deadline on %s', async (_label, body, timeoutMs) => {
-      vi.useFakeTimers();
-      const { api, fetch } = setup();
-      let complete!: (response: Response) => void;
-      fetch.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
-      const result = api('/api/jobs', body, { timeoutMs });
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
-      complete(json({ done: true }));
-      expect(await result).toEqual({ done: true });
-    },
-  );
+  it('does not impose a deadline on a GET with explicit opt-out', async () => {
+    vi.useFakeTimers();
+    const { api, fetch } = setup();
+    let complete!: (response: Response) => void;
+    fetch.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const result = api('/api/jobs', undefined, { timeoutMs: 0 });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    complete(json({ done: true }));
+    expect(await result).toEqual({ done: true });
+  });
+
+  it('aborts a stalled write at its default 120-second deadline', async () => {
+    vi.useFakeTimers();
+    const { api, fetch } = setup();
+    fetch.mockImplementation(untilAborted);
+    const result = expect(api('/api/jobs', {})).rejects.toMatchObject({ code: 'TIMEOUT', message: '请求超时，请重试' });
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it('allows a caller to explicitly time out a write without retrying it', async () => {
     vi.useFakeTimers();

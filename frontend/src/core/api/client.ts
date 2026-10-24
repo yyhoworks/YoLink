@@ -1,6 +1,6 @@
 export interface ApiOptions {
   signal?: AbortSignal;
-  /** 0 disables the deadline. Writes have no default deadline or retries. */
+  /** 0 disables the deadline. Writes default to a 120-second deadline. */
   timeoutMs?: number;
 }
 
@@ -14,7 +14,7 @@ export function createAPI(dependencies: {
 
   return async function request(path: string, body?: unknown, options: ApiOptions = {}): Promise<unknown> {
     const controller = new AbortController();
-    const timeoutMs = options.timeoutMs ?? (body === undefined ? dependencies.readTimeoutMs ?? 60_000 : 0);
+    const timeoutMs = options.timeoutMs ?? (body === undefined ? dependencies.readTimeoutMs ?? 60_000 : 120_000);
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const abort = () => controller.abort();

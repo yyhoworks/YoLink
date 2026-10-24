@@ -150,7 +150,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   ctx.loading=true;ctx.request=new AbortController();$('health-test').disabled=true;$('health-refresh').disabled=true;$('health-more').disabled=true;healthSelectionChanged();
   $('health-loading').textContent='正在测试目录连接…';reliabilityError('health-error','');
   let message='';
-  try{await api('/api/accounts/'+encodeURIComponent(ctx.account)+'/check',{}, {signal:ctx.request.signal});}
+  try{await api('/api/accounts/'+encodeURIComponent(ctx.account)+'/check',{}, {signal:ctx.request.signal,timeoutMs:180000});}
   catch(error){if(error.name!=='AbortError')message=error.message;}
   finally{if(healthContext===ctx){ctx.loading=false;ctx.request=null;await loadAccountHealth();if(healthContext===ctx&&message)reliabilityError('health-error',message);}}
  });
